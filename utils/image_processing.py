@@ -10,17 +10,15 @@ import imgaug.augmenters as iaa
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
-# Read parameters from a configuration file
-config = configparser.ConfigParser()
-config.read('config.ini')
-
-test_displacement_maps_path  = config['DEFAULT']['TEST_DATASET_PATH']
-
+##################
+# Global variables
+##################
 IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".tif'", ".tiff", ".bmp"]
 
-########################################################################################
+
+####################################################################################################
 # Function to get image from paths
-########################################################################################
+####################################################################################################
 def get_image_paths(directory):
     return [
         os.path.join(directory, fname)
@@ -754,6 +752,14 @@ def test_displacement_maps_generation(path):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
+    # Read parameters from a configuration file
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+
+    # Get the path to the test dataset directory
+    test_displacement_maps_path  = config['DEFAULT']['TEST_DATASET_PATH']
+
+    # Test displacement maps generation
     validation = test_displacement_maps_generation(test_displacement_maps_path)
 
     if not validation:

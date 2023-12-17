@@ -32,23 +32,24 @@ batch_size              = None
 # 'DEFAULT' paths section
 # - Constants for data generation
 ####################################################################################################
-def init_default_paths(dataset_size='small'):
+def init_default_paths(project_dir='./', dataset_size='small'):
     global project_path, displacement_maps_path, x_training_dataset_path, y_training_dataset_path
     global paths, num_pairs, batch_size
 
+    # Read the config file
     config = configparser.ConfigParser()
-    config.read('./config.ini')
+    config.read(project_dir + 'config.ini')
 
     # Path to the project root directory
-    project_path = config['DEFAULT']['PROJECT_PATH']
+    project_path = project_dir
 
     # Path to the displacement maps dataset 
-    displacement_maps_path  = config['DEFAULT']['DISPLACEMENT_DATASET_PATH']
+    displacement_maps_path  = project_path + config['DEFAULT']['DISPLACEMENT_DATASET_PATH']
 
     # Paths to the generated data directories 
-    training_dataset_path   = config['DEFAULT'][f'{dataset_size.upper()}_TRAINING_DATASET_PATH']
-    x_training_dataset_path = config['DEFAULT'][f'{dataset_size.upper()}_X_TRAINING_DATASET_PATH']
-    y_training_dataset_path = config['DEFAULT'][f'{dataset_size.upper()}_Y_TRAINING_DATASET_PATH']
+    training_dataset_path   = project_path + config['DEFAULT'][f'{dataset_size.upper()}_TRAINING_DATASET_PATH']
+    x_training_dataset_path = project_path + config['DEFAULT'][f'{dataset_size.upper()}_X_TRAINING_DATASET_PATH']
+    y_training_dataset_path = project_path + config['DEFAULT'][f'{dataset_size.upper()}_Y_TRAINING_DATASET_PATH']
 
     # Paths to be validated 
     paths = [training_dataset_path, x_training_dataset_path, y_training_dataset_path]
@@ -281,4 +282,4 @@ if __name__ == "__main__":
     validate_generated_data()
 
     # Display sample pairs
-    display_sample_pairs(num_pairs=10)
+    display_sample_pairs(num_pairs=5)
