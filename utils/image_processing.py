@@ -16,6 +16,20 @@ config.read('config.ini')
 
 test_displacement_maps_path  = config['DEFAULT']['TEST_DATASET_PATH']
 
+IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".tif'", ".tiff", ".bmp"]
+
+########################################################################################
+# Function to get image from paths
+########################################################################################
+def get_image_paths(directory):
+    return [
+        os.path.join(directory, fname)
+
+        for fname in sorted(os.listdir(directory))
+        
+        if os.path.splitext(fname)[1].lower() in IMAGE_EXTENSIONS
+    ]
+
 ####################################################################################################
 # Add blur
 # # Randomly choose between 3x3, 5x5, 7x7 kernel sizes
@@ -619,12 +633,17 @@ def load_inscriptions_images(path, target_size=(512, 512)):
 ####################################################################################################
 # Display samples of images
 ####################################################################################################
-def display_images(images, num_cols=3, img_size=(200, 200), titles=None, cmap='gray'):
+def display_images(images, num_cols=4, img_size=(200, 200), titles=None, cmap='gray', first_n=20):
     num_images = len(images)
 
     if num_images == 0:
         print("No images to display.")
         return
+
+    if num_images > first_n:
+        images = images[:first_n]
+        num_images = len(images)
+        print(f"Displaying first {first_n} images.")
 
     # Calculate the number of rows required in the grid
     num_rows = int(num_images / num_cols) + int(num_images % num_cols > 0)

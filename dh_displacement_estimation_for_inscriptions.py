@@ -218,7 +218,7 @@ def test_zoe():
 
     for i, img in enumerate(images_only):
         # Predict depth
-        depth_pil = predict_depth_zoe(zoe, img)
+        depth_pil = predict_depth(zoe, img)
 
         # show the depth map
         plt.imshow(depth_pil, cmap="gray")
