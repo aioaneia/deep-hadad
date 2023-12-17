@@ -1,0 +1,49 @@
+# OS generated files #
+######################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE generated files #
+######################
+.classpath
+.project
+.settings
+.idea
+.metadata
+*.iml
+*.ipr
+.vscode
+
+# Logs generated files #
+######################
+*.gz
+*.pb
+*.v2
+*.profile-empty
+
+# DeepLearning files
+######################
+*.h5
+
+# Image files
+######################
+/data/training_dataset/*
+/data/Inscriptions/*
+/data/inscriptions_dataset/*
+/data/-> Archive
+
+# Board files
+/runs/*
+
+# Model files
+/models/*
+
+# Python files
+######################
+*$py.class
+*.pyc
