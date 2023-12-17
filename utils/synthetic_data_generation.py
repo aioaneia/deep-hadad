@@ -10,55 +10,69 @@ import multiprocessing
 from matplotlib import pyplot as plt
 from PIL import Image
 
-# Read parameters from a configuration file
-config = configparser.ConfigParser()
-config.read('config.ini')
+# Add project path to sys.path
+sys.path.append('./')
+
+# Import image processing functions
+from utils import image_processing as ip 
+
+###############################
+# Global variables
+###############################
+project_path            = None
+displacement_maps_path  = None
+x_training_dataset_path = None
+y_training_dataset_path = None
+paths                   = None
+num_pairs               = None
+batch_size              = None
+
 
 ####################################################################################################
 # 'DEFAULT' paths section
+# - Constants for data generation
 ####################################################################################################
-project_path                 = config['DEFAULT']['PROJECT_PATH']
-displacement_maps_path       = config['DEFAULT']['DISPLACEMENT_DATASET_PATH']
+def init_default_paths(dataset_size='small'):
+    global project_path, displacement_maps_path, x_training_dataset_path, y_training_dataset_path
+    global paths, num_pairs, batch_size
 
-# training_dataset_path        = config['DEFAULT']['TRAINING_DATASET_PATH']
-# x_training_dataset_path      = config['DEFAULT']['X_TRAINING_DATASET_PATH']
-# y_training_dataset_path      = config['DEFAULT']['Y_TRAINING_DATASET_PATH']
+    config = configparser.ConfigParser()
+    config.read('./config.ini')
 
-training_dataset_path        = config['DEFAULT']['SMALL_TRAINING_DATASET_PATH']
-x_training_dataset_path      = config['DEFAULT']['SMALL_X_TRAINING_DATASET_PATH']
-y_training_dataset_path      = config['DEFAULT']['SMALL_Y_TRAINING_DATASET_PATH']
+    # Path to the project root directory
+    project_path = config['DEFAULT']['PROJECT_PATH']
 
-paths = [
-    training_dataset_path,
-    x_training_dataset_path,
-    y_training_dataset_path
-]
+    # Path to the displacement maps dataset 
+    displacement_maps_path  = config['DEFAULT']['DISPLACEMENT_DATASET_PATH']
 
-# Constants for data generation
-num_pairs = 5  # Number of synthetic pairs per image
-batch_size = 5  # Batch size for parallel processing
+    # Paths to the generated data directories 
+    training_dataset_path   = config['DEFAULT'][f'{dataset_size.upper()}_TRAINING_DATASET_PATH']
+    x_training_dataset_path = config['DEFAULT'][f'{dataset_size.upper()}_X_TRAINING_DATASET_PATH']
+    y_training_dataset_path = config['DEFAULT'][f'{dataset_size.upper()}_Y_TRAINING_DATASET_PATH']
 
-####################################################################################################
-# Add project path to sys.path
-# Import image processing functions
-####################################################################################################
+    # Paths to be validated 
+    paths = [training_dataset_path, x_training_dataset_path, y_training_dataset_path]
 
-# Add project path to sys.path
-sys.path.append(project_path)
+    # Number of synthetic pairs per image
+    num_pairs = int(config['DEFAULT']['NUM_OF_PAIRS'])
 
-# Import image processing functions
-import utils.image_processing as ip
-
+    # Batch size for parallel processing
+    batch_size = int(config['DEFAULT']['BATCH_SIZE'])
 
 ####################################################################################################
 # Validate and create directories
 ####################################################################################################
 def validate_directories(paths):
+    # Validate and create directories
     for path in paths:
+        print(f"Validating directory: {path}")
+
         if not os.path.exists(path):
             os.makedirs(path)
+        
         if not os.access(path, os.W_OK):
             raise Exception(f"Directory {path} is not writable.")
+    
     print('Directories validated successfully.')
 
 ####################################################################################################
@@ -122,7 +136,7 @@ def generate_synthetic_maps(displacement_maps, num_pairs=10):
 ####################################################################################################
 def generate_synthetic_maps_batch(batch_data):
     # Unpack batch data
-    displacement_maps_batch, num_pairs, batch_index = batch_data
+    displacement_maps_batch, num_pairs, batch_index, x_path, y_path = batch_data
 
     # Iterate through each displacement map
     for i, displacement_map in enumerate(displacement_maps_batch):
@@ -130,12 +144,14 @@ def generate_synthetic_maps_batch(batch_data):
             # Generate intact-damaged pair
             x_depth_image, y_depth_image = generate_pair_for_image(displacement_map)
 
+            # print(f"Saving batch {batch_index}, pair {j + i * num_pairs}")
+            # print(f"x training dataset path {x_path}")
+            # print(f"y training dataset path {y_path}")
+
             # Save intact-damaged pair with unique identifiers
             save_paired_image(
                 x_depth_image, y_depth_image, 
-                x_training_dataset_path, y_training_dataset_path, 
-                batch_index, j + i * num_pairs
-            )
+                x_path, y_path, batch_index, j + i * num_pairs)
 
     logging.info(f"Batch {batch_index} completed.")
 
@@ -171,14 +187,14 @@ def display_sample_pairs(num_pairs=10):
 ####################################################################################################
 # Use multiprocessing to generate the displacement maps in parallel
 ####################################################################################################
-def generate_data_in_parallel(displacement_maps, num_pairs=100, batch_size=10):
+def generate_data_in_parallel(displacement_maps, num_pairs=100, batch_size=10, x_path=x_training_dataset_path, y_path=y_training_dataset_path):
     # Split displacement maps into batches
     batches = [displacement_maps[i:i + batch_size] for i in range(0, len(displacement_maps), batch_size)]
 
-    # Prepare parameters for each batch
-    params = [(batch, num_pairs, batch_index) for batch_index, batch in enumerate(batches)]
+    # Prepare parameters for each batch 
+    params = [(batch, num_pairs, batch_index, x_path, y_path) for batch_index, batch in enumerate(batches)]
 
-    # Use multiprocessing pool to process each batch
+    # Use multiprocessing pool to process each batch in parallel 
     with multiprocessing.Pool() as pool:
         pool.map(generate_synthetic_maps_batch, params)
 
@@ -244,6 +260,14 @@ def load_displacement_maps_from_directory(path):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
+    # Initialize paths
+    init_default_paths()
+
+    print(f"Project Path:            {project_path}")
+    print(f"Displacement Maps Path:  {displacement_maps_path}")
+    print(f"X Training Dataset Path: {x_training_dataset_path}")
+    print(f"Y Training Dataset Path: {y_training_dataset_path}")
+
     # Validate and create directories
     validate_directories(paths)
 
@@ -251,7 +275,7 @@ if __name__ == "__main__":
     displacement_maps = load_displacement_maps_from_directory(displacement_maps_path)
 
     # Generate synthetic displacement maps in parallel
-    generate_data_in_parallel(displacement_maps, num_pairs, batch_size)
+    generate_data_in_parallel(displacement_maps, num_pairs, batch_size, x_training_dataset_path, y_training_dataset_path)
 
     # Validate the generated data
     validate_generated_data()
