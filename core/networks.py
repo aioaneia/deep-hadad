@@ -4,16 +4,17 @@ import torch
 import torch.nn            as nn
 import torch.nn.functional as F
 
-from torch.nn                     import InstanceNorm2d, Sigmoid, Tanh
+from torch.nn                     import InstanceNorm2d, Sigmoid, Conv2d, ReLU, Dropout, Module, AdaptiveAvgPool2d, Sequential, ConvTranspose2d
 from torch.nn.utils.spectral_norm import spectral_norm
 from torch.nn.init                import kaiming_normal_, orthogonal_
-
 
 #Alternative Attention Mechanisms
 
 # Convolutional Block Attention Module (CBAM):
 
 # This module sequentially infers attention maps along two dimensions (channel and spatial), which could enhance the model's focus on relevant features in depth maps.
+
+
 # Squeeze-and-Excitation (SE) Blocks:
 
 # Already used in your discriminator, these blocks could also be beneficial in the generator. They perform dynamic channel-wise feature recalibration, potentially enhancing the model's ability to focus on important features.
@@ -28,30 +29,30 @@ from torch.nn.init                import kaiming_normal_, orthogonal_
 # Instead of applying attention within a layer, layer attention mechanisms aggregate information across different layers. This can be particularly effective in U-Net architectures where features from different scales are combined.
 
 
-# Experiment with attention mechanisms:
-# Cross-attention between generator and discriminator
-
 ####################################################################################################
 # Self-Attention Layer
-
 ####################################################################################################
 class SelfAttention(nn.Module):
     def __init__(self, in_channels):
         super(SelfAttention, self).__init__()
 
         # Define the key, query, and value convolution layers
-        self.query_conv = nn.Conv2d(in_channels, in_channels // 8, 1)
-        self.key_conv   = nn.Conv2d(in_channels, in_channels // 8, 1)
-        self.value_conv = nn.Conv2d(in_channels, in_channels, 1)
+        self.query_conv = Conv2d(in_channels, in_channels // 8, 1)
+        self.key_conv   = Conv2d(in_channels, in_channels // 8, 1)
+        self.value_conv = Conv2d(in_channels, in_channels, 1)
+
+        # Check if CUDA (GPU) is available
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
 
         # Scale factor to ensure stable gradients, as suggested by the Attention is All You Need paper
-        self.scale = torch.sqrt(torch.FloatTensor([in_channels // 8]))
+        self.scale = torch.sqrt(torch.FloatTensor([in_channels // 8])).to(self.device)
 
         # Gamma parameter for learnable interpolation between input and attention
         self.gamma = nn.Parameter(torch.zeros(1))
 
-        # Ensure self.scale is on the same device as the other tensors
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     def forward(self, x):
         batch_size, channels, width, height = x.size()
@@ -78,102 +79,102 @@ class SelfAttention(nn.Module):
 
         return out
 
-# class SelfAttention(nn.Module):
-#     def __init__(self, in_channels):
-#         super(SelfAttention, self).__init__()
 
-#         self.query_conv = nn.Conv2d(in_channels, in_channels//8, 1)
-#         self.key_conv = nn.Conv2d(in_channels, in_channels//8, 1)
-#         self.value_conv = nn.Conv2d(in_channels, in_channels, 1)
-
-#         self.gamma = nn.Parameter(torch.zeros(1))
-
-#     def forward(self, x):
-#         batch_size, C, width, height = x.size()
-
-#         query = self.query_conv(x).view(batch_size, -1, width * height).permute(0, 2, 1)
-#         key = self.key_conv(x).view(batch_size, -1, width * height)
-#         value = self.value_conv(x).view(batch_size, -1, width * height)
-
-#         attn = torch.bmm(query, key)  # Batch Matrix Multiplication
-#         attn = F.softmax(attn, dim=-1)
-
-#         out = torch.bmm(value, attn.permute(0, 2, 1))
-
-#         out = out.view(batch_size, C, width, height)
-
-#         out = self.gamma * out + x
-
-#         return out
-
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, in_channels, num_heads=8, dropout=0.1):
-        super(MultiHeadAttention, self).__init__()
-        
-        self.num_heads = num_heads
-        self.attention_head_size = int(in_channels / num_heads)
-        self.all_head_size = self.num_heads * self.attention_head_size
-
-        self.query = nn.Linear(in_channels, self.all_head_size)
-        self.key = nn.Linear(in_channels, self.all_head_size)
-        self.value = nn.Linear(in_channels, self.all_head_size)
-
-        self.dropout = nn.Dropout(dropout)
-        self.out = nn.Linear(in_channels, in_channels)
-
-    def transpose_for_scores(self, x):
-        new_x_shape = x.size()[:-1] + (self.num_heads, self.attention_head_size)
-        x = x.view(*new_x_shape)
-
-        return x.permute(0, 2, 1, 3)
-
-    def forward(self, hidden_states):
-
-        mixed_query_layer = self.query(hidden_states)
-        mixed_key_layer = self.key(hidden_states)
-        mixed_value_layer = self.value(hidden_states)
-
-        query_layer = self.transpose_for_scores(mixed_query_layer)
-        key_layer = self.transpose_for_scores(mixed_key_layer)
-        value_layer = self.transpose_for_scores(mixed_value_layer)
-
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
-        attention_probs = nn.Softmax(dim=-1)(attention_scores)
-        attention_probs = self.dropout(attention_probs)
-
-        context_layer = torch.matmul(attention_probs, value_layer)
-        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(*new_context_layer_shape)
-
-        attention_output = self.out(context_layer)
-
-        return attention_output
-    
-class ResidualBlock(nn.Module):
+####################################################################################################
+# Residual Block
+####################################################################################################
+class ResidualBlock(Module):
+    """
+        Residual Block with instance normalization.
+    """
     def __init__(self, in_channels):
         super(ResidualBlock, self).__init__()
+
         self.block = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.InstanceNorm2d(in_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.InstanceNorm2d(in_channels)
+            Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            InstanceNorm2d(in_channels),
+            ReLU(inplace=True),
+            Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            InstanceNorm2d(in_channels)
         )
 
     def forward(self, x):
         return x + self.block(x)
 
+class ChannelAttention(nn.Module):
+    def __init__(self, in_channels, ratio=16):
+        super(ChannelAttention, self).__init__()
+
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+
+        self.fc1   = Conv2d(in_channels, in_channels // ratio, 1, bias=False)
+        self.relu1 = ReLU()
+        self.fc2   = Conv2d(in_channels // ratio, in_channels, 1, bias=False)
+
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = self.fc2(self.relu1(self.fc1(self.avg_pool(x))))
+        max_out = self.fc2(self.relu1(self.fc1(self.max_pool(x))))
+        out     = avg_out + max_out
+
+        return self.sigmoid(out)
+
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+
+        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
+
+        padding = 3 if kernel_size == 7 else 1
+
+        self.conv1   = Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out    = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x          = torch.cat([avg_out, max_out], dim=1)
+        x          = self.conv1(x)
+
+        return self.sigmoid(x)
     
+class CBAM(nn.Module):
+    def __init__(self, in_planes, ratio=16, kernel_size=7):
+        super(CBAM, self).__init__()
+
+        self.ca = ChannelAttention(in_planes, ratio)
+        self.sa = SpatialAttention(kernel_size)
+
+    def forward(self, x):
+        x = self.ca(x) * x
+        x = self.sa(x) * x
+
+        return x
+
 ####################################################################################################
 # Deep Hadad Generator Model based on an adapted U-Net architecture
-# [64, 96, 128, 192, 256, 384]
+# 
 ####################################################################################################
-class DHadadGenerator(nn.Module):
+class DHadadGenerator(Module):
+    """
+        Generator model based on an adapted U-Net architecture.
+        The model consists of an encoder and decoder with skip connections.
+        The encoder consists of 8 convolutional layers with residual connections starting from the third layer.
+        The decoder consists of 8 deconvolutional layers with skip connections.
+        The model also uses self-attention and multi-head attention layers.
+    """
     def __init__(self, in_channels, out_channels, filter_sizes=[64, 96, 128, 256, 384, 512, 1024, 1024],
         self_attention_levels=[2], num_residual_blocks = 1, dropout_prob=0.1):
+        """
+            in_channels: Number of input channels
+            out_channels: Number of output channels
+            filter_sizes: List of filter sizes for each layer
+            self_attention_levels: List of encoder levels where self-attention is applied
+            num_residual_blocks: Number of residual blocks in the encoder and decoder
+            dropout_prob: Dropout probability
+        """
         super(DHadadGenerator, self).__init__()
         
         # Initialize encoder
@@ -186,21 +187,24 @@ class DHadadGenerator(nn.Module):
         self.apply(self.initialize_weights)
 
         # Dropout layer
-        self.dropout = nn.Dropout(dropout_prob)
+        self.dropout = Dropout(dropout_prob)
 
         # Add Self-Attention layer
         self.self_attention = SelfAttention(256)
 
         # Initialize Multi-Head Attention
-        self.multi_head_attention = MultiHeadAttention(in_channels=512, num_heads=8, dropout=dropout_prob)
+        #self.multi_head_attention = MultiHeadAttention(in_channels=512, num_heads=8, dropout=dropout_prob)
 
-        # Initialize best PSNR
-        self.best_psnr = -float('inf')
-
+    # Initialize encoder
     def initialize_encoder(self, in_channels, filter_sizes, num_residual_blocks):
-        # Encoder 
-        self.encoders       = nn.ModuleList()
+        # Encoder blocks
+        self.encoders = nn.ModuleList()
+        
+        # Residual blocks for encoder
         self.res_blocks_enc = nn.ModuleList()
+
+        # CBAM modules for encoder
+        self.cbam_blocks_enc = nn.ModuleList()  
 
         # Subsequent encoder blocks with residual connections
         for idx, filter_size in enumerate(filter_sizes):
@@ -214,8 +218,12 @@ class DHadadGenerator(nn.Module):
                 for _ in range(num_residual_blocks):
                     self.res_blocks_enc.append(ResidualBlock(filter_size))
     
+            # Add CBAM module after each encoder layer
+            self.cbam_blocks_enc.append(CBAM(filter_size))
+
+    # Initialize decoder
     def initialize_decoder(self, out_channels, filter_sizes, num_residual_blocks):
-        self.decoders = nn.ModuleList()
+        self.decoders       = nn.ModuleList()
         self.res_blocks_dec = nn.ModuleList()
 
         self.decoders.append(self.deconv_block(1024, 1024))
@@ -230,7 +238,7 @@ class DHadadGenerator(nn.Module):
         for _ in range(num_residual_blocks):
             self.res_blocks_dec.append(ResidualBlock(filter_sizes[3]))
     
-
+    # Convolutional block
     def conv_block(self, in_channels, out_channels, batch_norm=True, activation=nn.LeakyReLU(0.2, inplace=False)):
         layers = [spectral_norm(nn.Conv2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1))]
         
@@ -239,43 +247,33 @@ class DHadadGenerator(nn.Module):
         
         layers.append(activation)
 
-        return nn.Sequential(*layers)
+        return Sequential(*layers)
 
+    # Deconvolutional block
     def deconv_block(self, in_channels, out_channels, batch_norm=True, activation=nn.LeakyReLU(0.2, inplace=False)): #
-        layers = [nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)]
+        layers = [ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)]
         
         if batch_norm:
             layers.append(InstanceNorm2d(out_channels))
         
         layers.append(activation)
 
-        return nn.Sequential(*layers)
+        return Sequential(*layers)
 
+    # Forward pass
     def forward(self, x):
         # Encoder with skip connections
         skip_connections = []
 
         for idx, encoder in enumerate(self.encoders):
             x = encoder(x)
-
-            #Apply residual blocks starting from the third encoder layer
+            
+            # Apply CBAM after each encoder layer
+            x = self.cbam_blocks_enc[idx](x)
+            
+            # Apply residual blocks starting from the third encoder layer
             if idx >= 3:
                 x = self.res_blocks_enc[idx - 3](x)
-
-            # Apply multi-head attention at a suitable position
-            if idx == 5:  
-                #print(f"Before MultiHeadAttention, x shape: {x.shape}")
-                
-                # Reshape x for MultiHeadAttention
-                batch_size, channels, height, width = x.shape
-                # Reshaping to [batch_size, seq_len, feature_dim]
-                x = x.view(batch_size, height * width, channels)
-
-                # Apply MultiHeadAttention
-                x = self.multi_head_attention(x)
-
-                # Reshape back to original dimensions if needed
-                x = x.view(batch_size, channels, height, width)
             
             # Skip connection except for the last layer
             if idx < len(self.encoders) - 1:
@@ -304,14 +302,6 @@ class DHadadGenerator(nn.Module):
 
         return x
 
-    # Add a method to check if performance has improved
-    def performance_improved(self, current_psnr):
-        if current_psnr > self.best_psnr:
-            self.best_psnr = current_psnr
-            return True
-        else:
-            return False
-
     # Function to initialize weights
     def initialize_weights(self, m):
         if isinstance(m, nn.Conv2d):
@@ -332,22 +322,22 @@ class DHadadGenerator(nn.Module):
 # Deep Hadad Discriminator based on PatchGAN
 ####################################################################################################
 
-class SqueezeExcitation(nn.Module):
+class SqueezeExcitation(Module):
     def __init__(self, in_channels, reduction=16):
         super(SqueezeExcitation, self).__init__()
 
         self.se = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(in_channels, in_channels // reduction, 1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels // reduction, in_channels, 1),
-            nn.Sigmoid()
+            AdaptiveAvgPool2d(1),
+            Conv2d(in_channels, in_channels // reduction, 1),
+            ReLU(inplace=True),
+            Conv2d(in_channels // reduction, in_channels, 1),
+            Sigmoid()
         )
 
     def forward(self, x):
         return x * self.se(x)
 
-class DHadadDiscriminator(nn.Module):
+class DHadadDiscriminator(Module):
     def __init__(self, in_channels, filter_sizes=[64, 128, 256, 512, 1024], use_spectral_norm=True):
         super(DHadadDiscriminator, self).__init__()
 

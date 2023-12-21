@@ -4,6 +4,7 @@ import sys
 import numpy as np
 import pandas as pd
 import logging
+import cv2
 
 import matplotlib.pyplot  as plt
 
@@ -44,21 +45,43 @@ logging.getLogger('lpips').setLevel(logging.WARNING)
 # Set constants
 PROJECT_PATH            = './'
 TEST_DATASET_PATH       = PROJECT_PATH + 'data/real_images'
-TRAINING_DATASET_PATH   = PROJECT_PATH + 'data/training_dataset'
+TRAINING_DATASET_PATH   = PROJECT_PATH + 'data/small_training_dataset'
 X_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/X'
 Y_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/Y'
 MODEL_PATH              = PROJECT_PATH + 'models/'
-MODEL_NAME              = 'generator_model_v1.pth'
 IMAGE_EXTENSIONS        = [".png", ".jpg", ".jpeg", ".tif'", ".tiff", ".bmp"]
 
 # Set hyperparameters
-generator_lr     = 5e-5
-discriminator_lr = 5e-5
-batch_size       = 32
-num_epochs       = 100
+generator_lr        = 5e-5
+discriminator_lr    = 5e-5
+batch_size          = 32
+num_epochs          = 100
+checkpoint_interval = 10
+max_grad_norm       = 1.0 # Define the maximum gradient norm for clipping
 
-# Define the maximum gradient norm for clipping
-max_grad_norm = 1.0
+########################################################################################
+#Adjustments:
+# If preserving fine details and textures is more important than exact structural matching, 
+# consider slightly decreasing alpha (MSE Loss) and increasing beta (L1 Loss).
+#
+# If depth and geometric details are crucial, 
+# consider slightly increasing epsilon (Depth Consistency Loss) and zeta (Geometric Consistency Loss).
+#
+# If the images are too smooth or lacking in detail, reduce eta (TV Loss).
+#
+# Adjust gamma (SSIM) based on the perceptual quality of the outputs.
+# If the outputs are structurally accurate but lack perceptual quality, consider increasing it.
+# 
+########################################################################################
+initial_weights = {
+    'alpha':   0.1,   # Weight for MSE Loss
+    'beta':    0.55,   # Weight for Reconstruction Loss (L1)
+    'gamma':   0.4,   # Weight for SSIM in Perceptual Loss
+    'delta':   0.1,   # Weight for Adversarial Loss
+    'epsilon': 0.2,   # Weight for Depth Consistency Loss
+    'zeta':    0.25,   # Weight for Geometric Consistency Loss
+    'eta':     0.01   # Weight for TV Loss
+}
 
 ########################################################################################
 # Initialize Optimizers
@@ -74,21 +97,6 @@ def init_optimizer(generator, discriminator, generator_lr, discriminator_lr):
 
     return gen_optim, dis_optim
 
-
-########################################################################################
-# Initial Loss Weights
-#
-# Adjusting the loss weights for DeepHadad's displacement map inscription restoration
-########################################################################################
-initial_weights = {
-    'alpha':   0.2,   # Weight for MSE Loss
-    'beta':    0.5,   # Weight for Reconstruction Loss (L1)
-    'gamma':   0.3,   # Weight for SSIM in Perceptual Loss
-    'delta':   0.1,   # Weight for Adversarial Loss
-    'epsilon': 0.2,   # Weight for Depth Consistency Loss
-    'zeta':    0.1,   # Weight for Geometric Consistency Loss
-    'eta':     0.05   # Weight for TV Loss
-}
 
 # Create a SummaryWriter object
 writer = SummaryWriter(PROJECT_PATH + '/runs/experiment_1')
@@ -428,22 +436,26 @@ class DynamicLossWeights:
             improvement = info['improved']
             magnitude = info['magnitude']
 
+            if metric == 'esi':
+                # ESI is a measure of edge similarity.
+                # Higher ESI indicates better structural integrity.
+                self.adjust_weight_for_metric('zeta', improvement, magnitude) # Geometric Consistency Loss adjustment
+
+                # Adversarial loss might be tuned down if ESI is high, focusing more on realism
+                self.adjust_weight_for_metric('delta', improvement, magnitude) # Adversarial Loss adjustment
+
             if metric == 'psnr':
-                # PSNR is a measure of reconstruction quality.
-                # Higher PSNR should potentially reduce the weight of perceptual losses
-                # as structural integrity improves.
-                self.adjust_weight_for_metric('gamma_ssim', not improvement, magnitude)
-                self.adjust_weight_for_metric('gamma_lpips', not improvement, magnitude)
+                # PSNR focuses on reconstruction quality.
+                # Improvement in PSNR indicates better structural integrity.
+                self.adjust_weight_for_metric('alpha', improvement, magnitude) # MSE Loss adjustment
 
-                # If PSNR is improving, structural losses like MSE can be reduced
-                self.adjust_weight_for_metric('alpha', improvement, magnitude)
+                # Improvement in PSNR indicates better structural integrity.
+                self.adjust_weight_for_metric('beta', improvement, magnitude) # L1 Loss adjustment
+            
             if metric == 'ssim':
-                # SSIM focuses on structural similarity.
+                # SSIM focuses on perceptual similarity.
                 # Improvement in SSIM indicates better structural integrity.
-                self.adjust_weight_for_metric('beta', not improvement, magnitude)  # L1 Loss adjustment
-
-                # Adversarial loss might be tuned down if SSIM is high, focusing more on realism
-                self.adjust_weight_for_metric('delta', improvement, magnitude)
+                self.adjust_weight_for_metric('gamma', improvement, magnitude) # SSIM Loss adjustment
 
         # Normalize weights after adjustment
         #self.normalize_weights()
@@ -503,9 +515,10 @@ def combined_gen_loss(gen_imgs, real_imgs, discriminator_preds, loss_weights):
 
     return combined_loss
 
-# ----------------------------------------------------
-# Define Evaluation Functions
-# ----------------------------------------------------
+########################################################################################
+# Peak Signal to Noise Ratio (PSNR)
+# PSNR is a measure of reconstruction quality.
+########################################################################################
 def compute_psnr(img1, img2):
     mse = F.mse_loss(img1, img2)
 
@@ -515,10 +528,10 @@ def compute_psnr(img1, img2):
     # Add a small positive number inside the square root to ensure the input is always non-negative
     return 20 * log10(1.0 / torch.sqrt(mse + 1e-10))
 
-# ----------------------------------------------------
+########################################################################################
 # Structural Similarity Index (SSIM)
-# ----------------------------------------------------
-def ssim(img1, img2, C1=0.01**2, C2=0.03**2):
+########################################################################################
+def compute_ssim(img1, img2, C1=0.01**2, C2=0.03**2):
     mu1 = torch.mean(img1, dim=[1, 2, 3])
     mu2 = torch.mean(img2, dim=[1, 2, 3])
 
@@ -531,6 +544,45 @@ def ssim(img1, img2, C1=0.01**2, C2=0.03**2):
     SSIM   = SSIM_n / SSIM_d
 
     return torch.mean(SSIM)
+
+########################################################################################
+# Edge Similarity Index (ESI)
+########################################################################################
+def compute_edge_similarity(img1, img2, device=device):
+    # Ensure the images are single-channel and convert to NumPy arrays if they are tensors
+    if torch.is_tensor(img1):
+        img1 = img1.squeeze().cpu().numpy()
+    if torch.is_tensor(img2):
+        img2 = img2.squeeze().cpu().numpy()
+
+    # Calculate Sobel edges for image 1
+    sobelx = cv2.Sobel(img1, cv2.CV_64F, dx=1, dy=0, ksize=5)
+    sobely = cv2.Sobel(img1, cv2.CV_64F, dx=0, dy=1, ksize=5)
+    edge1 = cv2.magnitude(sobelx, sobely)
+
+    # Calculate Sobel edges for image 2
+    sobelx = cv2.Sobel(img2, cv2.CV_64F, 1, 0, ksize=5)
+    sobely = cv2.Sobel(img2, cv2.CV_64F, 0, 1, ksize=5)
+    edge2 = cv2.magnitude(sobelx, sobely)
+
+    # Convert edges back to PyTorch tensors for SSIM calculation
+    edge1_tensor = torch.tensor(edge1, dtype=torch.float32).unsqueeze(0).to(device)
+    edge2_tensor = torch.tensor(edge2, dtype=torch.float32).unsqueeze(0).to(device)
+
+    return ssim(edge1_tensor, edge2_tensor)
+
+########################################################################################
+# Combined Score
+# A combined score that takes into account PSNR, SSIM, and ESI
+########################################################################################
+def combined_score(psnr, ssim, edge_similarity, weights = [0.4, 0.3, 0.3]):
+    weighted_psnr = 0.4 * psnr
+    weighted_ssim = 0.3 * ssim
+    weighted_edge = 0.3 * edge_similarity
+
+    total_score = weighted_psnr + weighted_ssim + weighted_edge
+
+    return total_score
 
 # ----------------------------------------------------
 # Define Evaluation Functions
@@ -574,20 +626,30 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
     dis_scheduler = StepLR(dis_optim, step_size=30, gamma=0.1)
 
     # Initialize some variables for averaging
-    best_psnr = -float('inf')
-    best_ssim = -float('inf')
+    best_psnr           = -float('inf')
+    best_ssim           = -float('inf')
+    best_esi            = -float('inf')
+    best_combined_score = -float('inf')
+
     patience = 10  # Number of epochs to wait for improvement
     epochs_no_improve = 0  # Counter for epochs without improvement
     avg_psnr = 0.0
     avg_ssim = 0.0
+    avg_esi  = 0.0
     num_batches = 0
     min_psnr, max_psnr = float('inf'), float('-inf')
     min_ssim, max_ssim = float('inf'), float('-inf')
-    std_psnr, std_ssim = 0, 0  # Standard deviation
+    min_esi,  max_esi  = float('inf'), float('-inf')
+    std_psnr, std_ssim, std_esi = 0, 0, 0  # Standard deviation
     gen_loss, dis_loss = 0, 0  # Generator and Discriminator losse
-    psnrs, ssims = [], []  # Lists to store all PSNR and SSIM values for each epoch
-    epoch_times = []  # List to store time taken for each epoch
-    lambda_gp = 10  # The gradient penalty coefficient
+    psnrs, ssims, esis = [], [], [] # Lists to store all PSNR and SSIM values for each epoch
+    epoch_times        = []  # List to store time taken for each epoch
+
+    # The gradient penalty coefficient
+    lambda_gp = 10
+    
+    # Set the number of critic updates per generator update
+    critic_updates_per_gen_update = 3
 
     torch.autograd.set_detect_anomaly(True)
 
@@ -598,9 +660,10 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
     for epoch in range(num_epochs):
         # Start time for this epoch
         start_time = time.time()
-        epoch_metrics = {'psnr': {'total': 0, 'count': 0}, 'ssim': {'total': 0, 'count': 0}}
+        epoch_metrics = {'psnr': {'total': 0, 'count': 0}, 'ssim': {'total': 0, 'count': 0}, 'esi': {'total': 0, 'count': 0}}
 
         for i, (intact, damaged) in enumerate(train_dataloader):
+            # Move images to GPU
             intact, damaged = intact.to(device), damaged.to(device)
 
             if epoch == 0 and i == 0:
@@ -612,31 +675,30 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
             # ---------------------------------------------------
             # Update Discriminator
             # ---------------------------------------------------
-            dis_optim.zero_grad()
+            for _ in range(critic_updates_per_gen_update):
+                dis_optim.zero_grad()
 
-            output_real = discriminator(intact)
-            output_fake = discriminator(restored.detach())
+                # Classify real and fake images
+                output_real = discriminator(intact)
+                output_fake = discriminator(restored.detach())
 
-            real_loss   = adversarial_loss(output_real, is_real = True)
-            fake_loss   = adversarial_loss(output_fake, is_real = False)
+                real_loss = adversarial_loss(output_real, is_real=True)
+                fake_loss = adversarial_loss(output_fake, is_real=False)
 
-            # Compute gradient penalty
-            gradient_penalty = compute_gradient_penalty(discriminator, intact, restored.detach())
+                # Compute gradient penalty
+                gradient_penalty = compute_gradient_penalty(discriminator, intact, restored.detach())
 
-            # Compute the total discriminator loss
-            dis_loss = (real_loss + fake_loss) / 2 + lambda_gp * gradient_penalty
+                # Compute the total discriminator loss
+                dis_loss = 0.5 * (real_loss + fake_loss) + lambda_gp * gradient_penalty
 
-            # Scale the loss
-            dis_loss.backward()
+                # Compute gradients
+                dis_loss.backward()
 
-            # Optimize
-            dis_optim.step()
-
-            # Clip gradients for discriminator
-            clip_grad_norm_(discriminator.parameters(), max_norm = max_grad_norm)
-
-            # Reset gradients
-            dis_optim.zero_grad()
+                # Clip gradients for discriminator
+                clip_grad_norm_(discriminator.parameters(), max_norm=max_grad_norm)
+                
+                # Optimize
+                dis_optim.step()
 
             # ---------------------------------------------------
             # Update Generator 
@@ -649,14 +711,11 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
             # Backprop
             gen_loss.backward()
             
-            # Optimize
-            gen_optim.step()
-            
             # Clip gradients for generator
             clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
 
-            # Reset gradients
-            gen_optim.zero_grad()
+            # Optimize
+            gen_optim.step()
 
             writer.add_scalar('Generator Loss',     gen_loss, global_step=epoch * len(train_dataloader) + i)
             writer.add_scalar('Discriminator Loss', dis_loss, global_step=epoch * len(train_dataloader) + i)
@@ -681,18 +740,27 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
 
                 writer.add_images('Restored Images', restored, global_step=epoch)
 
-                # Compute PSNR and SSIM for the current batch
+                # Compute PSNR for the current batch
                 batch_psnr = compute_psnr(restored, intact)
-                batch_ssim = ssim(restored, intact)
+
+                # Compute SSIM for the current batch
+                batch_ssim = compute_ssim(restored, intact)
+
+                # Compute ESI for the current batch
+                batch_edge_similarity = compute_edge_similarity(restored, intact, device=device)
 
                 psnrs.append(batch_psnr)
                 ssims.append(batch_ssim)
+                esis.append(batch_edge_similarity)
 
                 # Update epoch metrics
                 epoch_metrics['psnr']['total'] += batch_psnr
                 epoch_metrics['psnr']['count'] += 1
                 epoch_metrics['ssim']['total'] += batch_ssim
                 epoch_metrics['ssim']['count'] += 1
+                epoch_metrics['esi']['total']  += batch_edge_similarity
+                epoch_metrics['esi']['count']  += 1
+                
 
         # Switch back to training mode
         generator.train()
@@ -701,58 +769,76 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
         # Move tensors to CPU and convert to float
         psnrs_cpu = [x.cpu().item() if torch.is_tensor(x) else x for x in psnrs]
         ssims_cpu = [x.cpu().item() if torch.is_tensor(x) else x for x in ssims]
+        esis_cpu  = [x.cpu().item() if torch.is_tensor(x) else x for x in esis]
 
         avg_psnr = np.mean(psnrs_cpu)
         avg_ssim = np.mean(ssims_cpu)
+        avg_esi  = np.mean(esis_cpu)
 
         # At the end of the epoch, calculate average metrics
         avg_psnr_epoch = epoch_metrics['psnr']['total'] / epoch_metrics['psnr']['count']
         avg_ssim_epoch = epoch_metrics['ssim']['total'] / epoch_metrics['ssim']['count']
+        avg_esi_epoch  = epoch_metrics['esi']['total']  / epoch_metrics['esi']['count']
 
-        if avg_psnr > best_psnr:
-            best_psnr = avg_psnr
+        # Calculate combined score for the epoch
+        epoch_combined_score = combined_score(avg_psnr_epoch, avg_ssim_epoch, avg_esi_epoch)
+
+        # Save model checkpoints at regular intervals and best models
+        if epoch % checkpoint_interval == 0 or avg_psnr_epoch > best_psnr or avg_ssim_epoch > best_ssim or avg_esi_epoch > best_esi:
+            MODEL_NAME = f"generator_model_epoch_{epoch}.pth"
+
+            torch.save(generator.state_dict(), os.path.join(MODEL_PATH, MODEL_NAME))
+
+        # Early stopping based on combined score
+        if epoch_combined_score > best_combined_score:
+            best_combined_score = epoch_combined_score
             epochs_no_improve = 0
-            # Save the best model
-            print(f"Model saved at {epoch}")
-            torch.save(generator.state_dict(), MODEL_PATH + MODEL_NAME)
         else:
             epochs_no_improve += 1
 
-        # Inside the training loop, after calculating avg_ssim for the epoch
-        if avg_ssim > best_ssim:
-            best_ssim = avg_ssim
-            ssim_improved = True
-        else:
-            ssim_improved = False
-
+        if epochs_no_improve >= patience:
+            print(f"Early stopping at epoch {epoch} due to no improvement.")
+            break
+        
         # Update loss weights based on performance
         performance_metrics = {
             'psnr': {'improved': avg_psnr_epoch > best_psnr, 'magnitude': abs(avg_psnr_epoch - best_psnr)},
-            'ssim': {'improved': ssim_improved, 'magnitude': abs(avg_ssim_epoch - best_ssim)}
+            'ssim': {'improved': avg_ssim_epoch > best_ssim, 'magnitude': abs(avg_ssim_epoch - best_ssim)},
+            'esi':  {'improved': avg_esi_epoch > best_esi, 'magnitude': abs(avg_esi_epoch - best_esi)}
         }
 
         loss_weights.update_weights(performance_metrics)
 
         # Normalize weights every N epochs
-        if epoch % 5 == 0:
+        if epoch % 10 == 0:
             loss_weights.normalize_weights()
 
+        # Calculate min and max values
         min_psnr, max_psnr = np.min(psnrs_cpu), np.max(psnrs_cpu)
         min_ssim, max_ssim = np.min(ssims_cpu), np.max(ssims_cpu)
-        std_psnr, std_ssim = np.std(psnrs_cpu), np.std(psnrs_cpu)
+        min_esi,  max_esi  = np.min(esis_cpu),  np.max(esis_cpu)
+
+        # Calculate standard deviation
+        std_psnr, std_ssim, std_esi = np.std(psnrs_cpu), np.std(psnrs_cpu), np.std(esis_cpu)
 
         # Calculate time taken for this epoch
         epoch_time = time.time() - start_time
-        epoch_times.append(epoch_time)  # Store for future analysis if needed
 
-        # Logging
-        print(f"Epoch {epoch+1}/{num_epochs} - Time: {epoch_time:.2f}s")
-        print(f"  Average PSNR: {avg_psnr:.4f} (Min: {min_psnr:.4f}, Max: {max_psnr:.4f}, Std: {std_psnr:.4f})")
-        print(f"  Average SSIM: {avg_ssim:.4f} (Min: {min_ssim:.4f}, Max: {max_ssim:.4f}, Std: {std_ssim:.4f})")
-        print(f"  Generator Loss: {gen_loss:.4f}, Discriminator Loss: {dis_loss:.4f}")
+        # Store for future analysis if needed
+        epoch_times.append(epoch_time)  
+
+        # Logging for each epoch
+        print(f" Epoch {epoch+1}/{num_epochs} - Time: {epoch_time:.2f}s")
+        print(f" Loss Weights:   {loss_weights.weights}")
+        print(f" Average PSNR:   {avg_psnr:.4f} (Min: {min_psnr:.4f}, Max: {max_psnr:.4f}, Std: {std_psnr:.4f}, Epoch Avg: {avg_psnr_epoch:.4f})")
+        print(f" Average SSIM:   {avg_ssim:.4f} (Min: {min_ssim:.4f}, Max: {max_ssim:.4f}, Std: {std_ssim:.4f}, Epoch Avg: {avg_ssim_epoch:.4f})")
+        print(f" Average ESI:    {avg_esi:.4f}  (Min: {min_esi:.4f},  Max: {max_esi:.4f},  Std: {std_esi:.4f},  Epoch Avg: {avg_esi_epoch:.4f})")
+        print(f" Combined Score: {combined_score(avg_psnr, avg_ssim, avg_esi):.4f}")
+        print(f" Generator Loss: {gen_loss:.4f}, Discriminator Loss: {dis_loss:.4f}")
 
         writer.add_scalar('Validation/Avg_PSNR', avg_psnr, global_step=epoch)
         writer.add_scalar('Validation/Avg_SSIM', avg_ssim, global_step=epoch)
+        writer.add_scalar('Validation/Avg_ESI',  avg_esi,  global_step=epoch)
         writer.add_histogram('Generator/First_Layer_Weights', list(generator.parameters())[0], global_step=epoch)
         writer.add_scalar('Learning Rate/Generator', gen_optim.param_groups[0]['lr'], global_step=epoch)
         writer.add_scalar('Learning Rate/Discriminator', dis_optim.param_groups[0]['lr'], global_step=epoch)
@@ -761,13 +847,14 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
         # Reset for next epoch
         psnrs.clear()
         ssims.clear()
+        esis.clear()
 
         # Check for early stopping
         if epochs_no_improve >= patience:
             print("An early stopping here?!")
             #break
         
-                    # Step the learning rate scheduler
+        # Step the learning rate scheduler
         gen_scheduler.step()
         dis_scheduler.step()
 
