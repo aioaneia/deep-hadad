@@ -2,65 +2,59 @@ import os
 import time
 import sys
 import numpy as np
-import pandas as pd
 import logging
 import cv2
-
-import matplotlib.pyplot  as plt
-
-from lpips import LPIPS
-from tqdm import tqdm
+import glob
 
 import torch
 import torch.nn            as nn
 import torch.nn.functional as F
 
 from torch.nn.utils           import clip_grad_norm_
-from torch.utils.data         import Dataset, DataLoader, TensorDataset
-from torch.utils.tensorboard  import SummaryWriter
+from torch.utils.data         import DataLoader
 from torch.optim              import Adam, SGD
 from torch.optim.lr_scheduler import StepLR
-from torch.cuda.amp           import GradScaler
 
-from torchvision            import transforms
-from torchvision.transforms import Grayscale
+from torchvision import transforms
 
-from pytorch_msssim import ssim, ms_ssim, SSIM, MS_SSIM
+from pytorch_msssim import ssim
 
 from PIL import Image
 
 from sklearn.model_selection import train_test_split
-from skimage.morphology import disk
 from math import log10
 
-# Add project path to sys.path
+# Add the project directory to the Python path
 sys.path.append('./')
 
-# Import image processing functions
+# Import the DeepHadad network
 import core.networks as dh_networks
 
-# Set logging level
-logging.getLogger('lpips').setLevel(logging.WARNING)
+from utils.DisplacementMapDataset  import DisplacementMapDataset
+from loss.DynamicLossWeights       import DynamicLossWeights
+from loss.WeightedSSIMLoss         import WeightedSSIMLoss
+from loss.DepthConsistencyLoss     import DepthConsistencyLoss
+from loss.GeometricConsistencyLoss import GeometricConsistencyLoss
 
 # Set constants
 PROJECT_PATH            = './'
-TEST_DATASET_PATH       = PROJECT_PATH + 'data/real_images'
 TRAINING_DATASET_PATH   = PROJECT_PATH + 'data/small_training_dataset'
 X_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/X'
 Y_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/Y'
 MODEL_PATH              = PROJECT_PATH + 'models/'
-IMAGE_EXTENSIONS        = [".png", ".jpg", ".jpeg", ".tif'", ".tiff", ".bmp"]
+IMAGE_EXTENSIONS        = [".png", ".jpg", ".tif'"]
 
 # Set hyperparameters
-generator_lr        = 5e-5
-discriminator_lr    = 5e-5
-batch_size          = 32
-num_epochs          = 100
+generator_lr        = 2e-5
+discriminator_lr    = 2e-5
+batch_size          = 36
+num_epochs          = 120
 checkpoint_interval = 10
-max_grad_norm       = 1.0 # Define the maximum gradient norm for clipping
+max_grad_norm       = 1.0
 
-########################################################################################
-#Adjustments:
+
+# Initial Loss Weights
+# Adjustments:
 # If preserving fine details and textures is more important than exact structural matching, 
 # consider slightly decreasing alpha (MSE Loss) and increasing beta (L1 Loss).
 #
@@ -71,38 +65,29 @@ max_grad_norm       = 1.0 # Define the maximum gradient norm for clipping
 #
 # Adjust gamma (SSIM) based on the perceptual quality of the outputs.
 # If the outputs are structurally accurate but lack perceptual quality, consider increasing it.
-# 
-########################################################################################
 initial_weights = {
-    'alpha':   0.1,   # Weight for MSE Loss
-    'beta':    0.55,   # Weight for Reconstruction Loss (L1)
-    'gamma':   0.4,   # Weight for SSIM in Perceptual Loss
-    'delta':   0.1,   # Weight for Adversarial Loss
-    'epsilon': 0.2,   # Weight for Depth Consistency Loss
-    'zeta':    0.25,   # Weight for Geometric Consistency Loss
+    'alpha':   0.15,  # Weight for MSE Loss
+    'beta':    0.25,  # Weight for Reconstruction Loss (L1)
+    'gamma':   0.30,  # Weight for SSIM in Perceptual Loss
+    'delta':   0.05,  # Weight for Adversarial Loss
+    'epsilon': 0.10,  # Weight for Depth Consistency Loss
+    'zeta':    0.20,  # Weight for Geometric Consistency Loss
     'eta':     0.01   # Weight for TV Loss
 }
 
-########################################################################################
-# Initialize Optimizers
-# RMSProp or Adagrad
-########################################################################################
-def init_optimizer(generator, discriminator, generator_lr, discriminator_lr):
-    # Initialize optimizers
-    gen_optim = Adam(generator.parameters(),     lr=generator_lr,     betas=(0.5, 0.999))
-    dis_optim = Adam(discriminator.parameters(), lr=discriminator_lr, betas=(0.5, 0.999))
+# initial_weights = {
+#     'alpha':   0.25,  # Weight for MSE Loss
+#     'beta':    0.20,  # Weight for Reconstruction Loss (L1)
+#     'gamma':   0.25,  # Weight for SSIM in Perceptual Loss
+#     'delta':   0.05,  # Weight for Adversarial Loss
+#     'epsilon': 0.10,  # Weight for Depth Consistency Loss
+#     'zeta':    0.15,  # Weight for Geometric Consistency Loss
+#     'eta':     0.05   # Weight for TV Loss
+# }
 
-    # gen_optim = SGD(generator.parameters(),     lr=generator_lr)
-    # dis_optim = SGD(discriminator.parameters(), lr=discriminator_lr)
-
-    return gen_optim, dis_optim
-
-
-# Create a SummaryWriter object
-writer = SummaryWriter(PROJECT_PATH + '/runs/experiment_1')
-
-# PyTorch version
-print(torch.__version__)
+# Dynamic Loss Weights
+# Adjusting the loss weights for DeepHadad's displacement map inscription restoration
+loss_weights = DynamicLossWeights(initial_weights)
 
 # Check if CUDA (GPU) is available
 if torch.cuda.is_available():
@@ -122,80 +107,26 @@ if torch.backends.mps.is_available():
 else:
     print("MPS device not found.")
 
+# PyTorch version
+print("PyTorch version: " + torch.__version__)
 
-########################################################################################
-# Function to get image from paths
-########################################################################################
+# Get the paths of all images in a directory
 def get_image_paths(directory):
-    return [
-        os.path.join(directory, fname)
+    image_paths = []
 
-        for fname in sorted(os.listdir(directory))
-        
-        if os.path.splitext(fname)[1].lower() in IMAGE_EXTENSIONS
-    ]
+    for ext in IMAGE_EXTENSIONS:
+        image_paths.extend(glob.glob(os.path.join(directory, '*' + ext)))
 
-class DisplacementMapDataset(Dataset):
-    def __init__(self, intact_image_paths, damaged_image_paths, transform=None):
-        """
-        Args:
-            intact_image_paths  (list): List of paths to intact images
-            damaged_image_paths (list): List of paths to damaged images
-            transform           (callable, optional): Optional transform to be applied on a sample.
-        """
-        self.intact_image_paths  = intact_image_paths
-        self.damaged_image_paths = damaged_image_paths
-        self.transform           = transform
-        self.counter             = 0 
+    return sorted(image_paths)
 
-    def filter_invalid_images(self, image_paths):
-        valid_image_paths = []
-
-        for image_path in image_paths:
-            try:
-                Image.open(image_path)
-                valid_image_paths.append(image_path)
-            except IOError:
-                print(f"Error opening image file: {image_path}")
-        
-        return valid_image_paths
-  
-    def __len__(self):
-        return len(self.intact_image_paths)
-
-    def __getitem__(self, idx):
-        while True:
-            try:
-                intact_image_path  = self.intact_image_paths[idx]
-                damaged_image_path = self.damaged_image_paths[idx]
-
-                intact_image  = Image.open(intact_image_path)
-                damaged_image = Image.open(damaged_image_path)
-
-                if self.transform:
-                    intact_image  = self.transform(intact_image)
-                    damaged_image = self.transform(damaged_image)
-
-                # Increment the counter and log every 100 pairs
-                self.counter += 1
-
-                if self.counter % 100 == 0:
-                    print(f"Processed {self.counter} pairs. Current pair: {intact_image_path}, {damaged_image_path}")
-                
-                return intact_image, damaged_image
-            except IOError as e:
-                print(f"Error opening image files: {intact_image_path}, {damaged_image_path}. Error: {e}")
-                # Increment the index and try the next pair of images
-                idx = (idx + 1) % len(self.intact_image_paths)
-
-
-########################################################################################
 # Load the dataset
-########################################################################################
 def load_dataset():
     # Get images from path
     intact_image_paths  = get_image_paths(X_TRAINING_DATASET_PATH)
     damaged_image_paths = get_image_paths(Y_TRAINING_DATASET_PATH)
+
+    print(f"Path to Intact Images:  {X_TRAINING_DATASET_PATH}")
+    print(f"Path to Damaged Images: {Y_TRAINING_DATASET_PATH}")
 
     print(f"Number of Paired Inscriptions: {len(intact_image_paths)}")
     print(f"Number of Paired Inscriptions: {len(damaged_image_paths)}")
@@ -203,7 +134,6 @@ def load_dataset():
     #assert len(intact_image_paths) == len(damaged_image_paths), "Number of intact and damaged images must be the same"
 
     print(f"Number of Paired Inscriptions: {len(intact_image_paths)}")
-
 
     # Calculate mean and std for the dataset
     mean = 0.
@@ -270,6 +200,20 @@ def load_dataset():
 
 
 ########################################################################################
+# Initialize Optimizers
+# RMSProp or Adagrad
+########################################################################################
+def init_optimizer(generator, discriminator):
+    # Initialize optimizers
+    gen_optim = Adam(generator.parameters(),     lr=generator_lr,     betas=(0.5, 0.999))
+    dis_optim = Adam(discriminator.parameters(), lr=discriminator_lr, betas=(0.5, 0.999))
+
+    # gen_optim = SGD(generator.parameters(),     lr=generator_lr)
+    # dis_optim = SGD(discriminator.parameters(), lr=discriminator_lr)
+
+    return gen_optim, dis_optim
+
+########################################################################################
 # Instantiate the generator and discriminator
 ########################################################################################
 def instantiate_networks():
@@ -312,27 +256,13 @@ l1_loss = nn.L1Loss().to(device)
 # luminance, and contrast in an image.
 # A higher weight is crucial as it emphasizes on the perceptual similarity, which is key for letter reconstruction.
 ########################################################################################
-class WeightedSSIMLoss(nn.Module):
-    def __init__(self, data_range=255, size_average=True, channel=1, weight=1.0):
-        super(WeightedSSIMLoss, self).__init__()
-
-        self.ssim   = SSIM(data_range=data_range, size_average=size_average, channel=channel)
-        self.weight = weight
-
-    def forward(self, img1, img2):
-
-        ssim_loss          = self.ssim(img1, img2)
-        weighted_ssim_loss = self.weight * (1 - ssim_loss)  # Weighted SSIM loss
-
-        return weighted_ssim_loss
-
 weighted_ssim_loss = WeightedSSIMLoss(data_range=255, size_average=True, channel=1, weight=1.0)
 
 ########################################################################################
 # LPIPS Loss
 # LPIPS is a perceptual loss that uses a pretrained VGG19 network to calculate
 ########################################################################################
-lpips_loss = LPIPS(net='vgg').to(device)  # Use the AlexNet layer
+#lpips_loss = LPIPS(net='vgg').to(device)
 
 ########################################################################################
 # Adversarial Loss
@@ -343,6 +273,7 @@ lpips_loss = LPIPS(net='vgg').to(device)  # Use the AlexNet layer
 ########################################################################################
 bce_with_logits_loss = nn.BCEWithLogitsLoss().to(device)
 
+# adversarial loss
 def adversarial_loss(discriminator_preds, is_real=True):
     if is_real:
         labels = torch.ones_like(discriminator_preds).to(device)
@@ -358,18 +289,6 @@ def adversarial_loss(discriminator_preds, is_real=True):
 # Depth data is uncertain in some places
 # This loss can help in smoothing the depth map without losing essential details.
 ########################################################################################
-class DepthConsistencyLoss(nn.Module):
-    def __init__(self, epsilon=1e-6):
-        super(DepthConsistencyLoss, self).__init__()
-        self.epsilon = epsilon
-
-    def forward(self, generated_depth, target_depth):
-        # Assuming generated_depth and target_depth are tensors representing depth maps
-        # Charbonnier Loss: sqrt((x - y)^2 + epsilon)
-        loss = torch.mean(torch.sqrt((generated_depth - target_depth) ** 2 + self.epsilon))
-
-        return loss
-
 depth_consistency_loss = DepthConsistencyLoss().to(device)
 
 ########################################################################################
@@ -377,34 +296,7 @@ depth_consistency_loss = DepthConsistencyLoss().to(device)
 # Maintains geometric integrity of depth information.
 # This will help in preserving the contours and shapes of letters in the displacement maps.
 ########################################################################################
-class GeometricConsistencyLoss(nn.Module):
-    def __init__(self):
-        super(GeometricConsistencyLoss, self).__init__()
-
-    def forward(self, predicted_map, target_map):
-        # Calculate gradients in x and y direction
-        # These gradients represent the change in depth (or displacement) across pixels
-        grad_x_pred, grad_y_pred = self.compute_gradients(predicted_map)
-        grad_x_target, grad_y_target = self.compute_gradients(target_map)
-
-        # Calculate the loss as the mean squared error between the gradients of the predicted and target maps
-        loss_x = F.mse_loss(grad_x_pred, grad_x_target)
-        loss_y = F.mse_loss(grad_y_pred, grad_y_target)
-
-        # Combine the losses
-        loss = loss_x + loss_y
-
-        return loss
-
-    def compute_gradients(self, map):
-        # Function to compute gradients in the x and y direction
-        grad_x = map[:, :, :, :-1] - map[:, :, :, 1:]
-        grad_y = map[:, :, :-1, :] - map[:, :, 1:, :]
-
-        return grad_x, grad_y
-
 geometric_consistency_loss = GeometricConsistencyLoss().to(device)
-
 
 ########################################################################################
 # Total Variation Loss
@@ -419,66 +311,9 @@ def tv_loss(img):
 
     return (tv_h + tv_w) / (batch_size * height * width)
 
-########################################################################################
-# Dynamic Loss Weights
-# Adjusting the loss weights for DeepHadad's displacement map inscription restoration
-########################################################################################
-class DynamicLossWeights:
-    def __init__(self, initial_weights, max_weight=1.0, min_weight=0.01, decay_factor=0.9):
-        self.weights = initial_weights
-        self.max_weight = max_weight
-        self.min_weight = min_weight
-        self.decay_factor = decay_factor
-
-    def update_weights(self, performance_metrics):
-        # Adjust weights based on the specific metric and its improvement
-        for metric, info in performance_metrics.items():
-            improvement = info['improved']
-            magnitude = info['magnitude']
-
-            if metric == 'esi':
-                # ESI is a measure of edge similarity.
-                # Higher ESI indicates better structural integrity.
-                self.adjust_weight_for_metric('zeta', improvement, magnitude) # Geometric Consistency Loss adjustment
-
-                # Adversarial loss might be tuned down if ESI is high, focusing more on realism
-                self.adjust_weight_for_metric('delta', improvement, magnitude) # Adversarial Loss adjustment
-
-            if metric == 'psnr':
-                # PSNR focuses on reconstruction quality.
-                # Improvement in PSNR indicates better structural integrity.
-                self.adjust_weight_for_metric('alpha', improvement, magnitude) # MSE Loss adjustment
-
-                # Improvement in PSNR indicates better structural integrity.
-                self.adjust_weight_for_metric('beta', improvement, magnitude) # L1 Loss adjustment
-            
-            if metric == 'ssim':
-                # SSIM focuses on perceptual similarity.
-                # Improvement in SSIM indicates better structural integrity.
-                self.adjust_weight_for_metric('gamma', improvement, magnitude) # SSIM Loss adjustment
-
-        # Normalize weights after adjustment
-        #self.normalize_weights()
-
-        return self.weights
-
-    def adjust_weight_for_metric(self, weight_key, improvement, magnitude):
-        factor = self.decay_factor if improvement else 1.1 * (1 + magnitude)
-
-        self.weights[weight_key] *= factor
-
-        self.weights[weight_key] = min(max(self.weights[weight_key], self.min_weight), self.max_weight)
-
-    def normalize_weights(self):
-        total_weight = sum(self.weights.values())
-
-        for key in self.weights:
-            self.weights[key] = (self.weights[key] / total_weight) * self.max_weight
-
-loss_weights = DynamicLossWeights(initial_weights)
 
 ########################################################################################
-# Combined generator loss function.
+# Combined generator loss function
 ########################################################################################
 def combined_gen_loss(gen_imgs, real_imgs, discriminator_preds, loss_weights):
     # Mean Squared Error Loss
@@ -489,7 +324,6 @@ def combined_gen_loss(gen_imgs, real_imgs, discriminator_preds, loss_weights):
 
     # Perceptual Loss
     ssim_loss = weighted_ssim_loss(gen_imgs, real_imgs).to(device)
-    #lpips_loss_value = lpips_loss(gen_imgs, real_imgs)
 
     # Adversarial Loss for the generator
     adv_loss = adversarial_loss(discriminator_preds, is_real=False)
@@ -503,6 +337,7 @@ def combined_gen_loss(gen_imgs, real_imgs, discriminator_preds, loss_weights):
     #TV loss function
     tv_loss_value = tv_loss(gen_imgs)
 
+    # Combine the losses
     combined_loss = torch.mean(
         loss_weights['alpha'] * mse_loss + \
         loss_weights['beta'] * recon_loss + \
@@ -584,14 +419,14 @@ def combined_score(psnr, ssim, edge_similarity, weights = [0.4, 0.3, 0.3]):
 
     return total_score
 
-# ----------------------------------------------------
+########################################################################################
 # Define Evaluation Functions
 # Gradient Penalty
 # The gradient penalty is typically used in the context of Wasserstein GANs
 # with Gradient Penalty (WGAN-GP).
 # It enforces the Lipschitz constraint by penalizing the gradient norm
 # of the discriminator's output with respect to its input.
-# -------------------------------------------------
+########################################################################################
 def compute_gradient_penalty(D, real_samples, fake_samples):
     # Random weight term for interpolation between real and fake samples
     alpha = torch.rand((real_samples.size(0), 1, 1, 1), device=real_samples.device)
@@ -613,14 +448,15 @@ def compute_gradient_penalty(D, real_samples, fake_samples):
         only_inputs=True,
     )[0]
 
-    gradients = gradients.view(gradients.size(0), -1)
+    gradients        = gradients.view(gradients.size(0), -1)
     gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+
     return gradient_penalty
 
 ########################################################################################
 # Training Loop
 ########################################################################################
-def network_training(train_dataloader, generator, discriminator, gen_optim, dis_optim, loss_weights, num_epochs):
+def network_training(train_dataloader, val_dataloader, generator, discriminator, gen_optim, dis_optim):
     #Learning Rate Scheduling
     gen_scheduler = StepLR(gen_optim, step_size=30, gamma=0.1)
     dis_scheduler = StepLR(dis_optim, step_size=30, gamma=0.1)
@@ -631,12 +467,11 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
     best_esi            = -float('inf')
     best_combined_score = -float('inf')
 
-    patience = 10  # Number of epochs to wait for improvement
+    patience = 12  # Number of epochs to wait for improvement
     epochs_no_improve = 0  # Counter for epochs without improvement
     avg_psnr = 0.0
     avg_ssim = 0.0
     avg_esi  = 0.0
-    num_batches = 0
     min_psnr, max_psnr = float('inf'), float('-inf')
     min_ssim, max_ssim = float('inf'), float('-inf')
     min_esi,  max_esi  = float('inf'), float('-inf')
@@ -649,25 +484,19 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
     lambda_gp = 10
     
     # Set the number of critic updates per generator update
-    critic_updates_per_gen_update = 3
+    critic_updates_per_gen_update = 2
 
+    # Enable anomaly detection for debugging
     torch.autograd.set_detect_anomaly(True)
-
-    # Initialize GradScaler
-    #scaler = GradScaler()
 
     # TRAINING LOOP
     for epoch in range(num_epochs):
         # Start time for this epoch
         start_time = time.time()
-        epoch_metrics = {'psnr': {'total': 0, 'count': 0}, 'ssim': {'total': 0, 'count': 0}, 'esi': {'total': 0, 'count': 0}}
 
-        for i, (intact, damaged) in enumerate(train_dataloader):
+        for i, (damaged, intact) in enumerate(train_dataloader): # (intact, damaged) ?
             # Move images to GPU
             intact, damaged = intact.to(device), damaged.to(device)
-
-            if epoch == 0 and i == 0:
-                writer.add_graph(generator, damaged)
 
             # Generate restored images from the damaged images
             restored = generator(damaged)
@@ -717,9 +546,6 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
             # Optimize
             gen_optim.step()
 
-            writer.add_scalar('Generator Loss',     gen_loss, global_step=epoch * len(train_dataloader) + i)
-            writer.add_scalar('Discriminator Loss', dis_loss, global_step=epoch * len(train_dataloader) + i)
-
         # ---------------------------------------------------
         # Validation step
         # ---------------------------------------------------
@@ -727,7 +553,7 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
             # Clip val gradients
             torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=1.0)
 
-            for intact, damaged in val_dataloader:
+            for damaged, intact in val_dataloader: # intact, damaged ?
                 intact  = intact.to(device)
                 damaged = damaged.to(device)
 
@@ -738,29 +564,15 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
                 restored = restored.clamp(0, 1)
                 intact   = intact.clamp(0, 1)
 
-                writer.add_images('Restored Images', restored, global_step=epoch)
-
-                # Compute PSNR for the current batch
+                # Compute PSNR, SSIM, ESI for the current batch
                 batch_psnr = compute_psnr(restored, intact)
-
-                # Compute SSIM for the current batch
                 batch_ssim = compute_ssim(restored, intact)
-
-                # Compute ESI for the current batch
-                batch_edge_similarity = compute_edge_similarity(restored, intact, device=device)
-
-                psnrs.append(batch_psnr)
-                ssims.append(batch_ssim)
-                esis.append(batch_edge_similarity)
+                batch_esi  = compute_edge_similarity(restored, intact, device=device)
 
                 # Update epoch metrics
-                epoch_metrics['psnr']['total'] += batch_psnr
-                epoch_metrics['psnr']['count'] += 1
-                epoch_metrics['ssim']['total'] += batch_ssim
-                epoch_metrics['ssim']['count'] += 1
-                epoch_metrics['esi']['total']  += batch_edge_similarity
-                epoch_metrics['esi']['count']  += 1
-                
+                psnrs.append(batch_psnr)
+                ssims.append(batch_ssim)
+                esis.append(batch_esi)
 
         # Switch back to training mode
         generator.train()
@@ -771,48 +583,6 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
         ssims_cpu = [x.cpu().item() if torch.is_tensor(x) else x for x in ssims]
         esis_cpu  = [x.cpu().item() if torch.is_tensor(x) else x for x in esis]
 
-        avg_psnr = np.mean(psnrs_cpu)
-        avg_ssim = np.mean(ssims_cpu)
-        avg_esi  = np.mean(esis_cpu)
-
-        # At the end of the epoch, calculate average metrics
-        avg_psnr_epoch = epoch_metrics['psnr']['total'] / epoch_metrics['psnr']['count']
-        avg_ssim_epoch = epoch_metrics['ssim']['total'] / epoch_metrics['ssim']['count']
-        avg_esi_epoch  = epoch_metrics['esi']['total']  / epoch_metrics['esi']['count']
-
-        # Calculate combined score for the epoch
-        epoch_combined_score = combined_score(avg_psnr_epoch, avg_ssim_epoch, avg_esi_epoch)
-
-        # Save model checkpoints at regular intervals and best models
-        if epoch % checkpoint_interval == 0 or avg_psnr_epoch > best_psnr or avg_ssim_epoch > best_ssim or avg_esi_epoch > best_esi:
-            MODEL_NAME = f"generator_model_epoch_{epoch}.pth"
-
-            torch.save(generator.state_dict(), os.path.join(MODEL_PATH, MODEL_NAME))
-
-        # Early stopping based on combined score
-        if epoch_combined_score > best_combined_score:
-            best_combined_score = epoch_combined_score
-            epochs_no_improve = 0
-        else:
-            epochs_no_improve += 1
-
-        if epochs_no_improve >= patience:
-            print(f"Early stopping at epoch {epoch} due to no improvement.")
-            break
-        
-        # Update loss weights based on performance
-        performance_metrics = {
-            'psnr': {'improved': avg_psnr_epoch > best_psnr, 'magnitude': abs(avg_psnr_epoch - best_psnr)},
-            'ssim': {'improved': avg_ssim_epoch > best_ssim, 'magnitude': abs(avg_ssim_epoch - best_ssim)},
-            'esi':  {'improved': avg_esi_epoch > best_esi, 'magnitude': abs(avg_esi_epoch - best_esi)}
-        }
-
-        loss_weights.update_weights(performance_metrics)
-
-        # Normalize weights every N epochs
-        if epoch % 10 == 0:
-            loss_weights.normalize_weights()
-
         # Calculate min and max values
         min_psnr, max_psnr = np.min(psnrs_cpu), np.max(psnrs_cpu)
         min_ssim, max_ssim = np.min(ssims_cpu), np.max(ssims_cpu)
@@ -821,50 +591,105 @@ def network_training(train_dataloader, generator, discriminator, gen_optim, dis_
         # Calculate standard deviation
         std_psnr, std_ssim, std_esi = np.std(psnrs_cpu), np.std(psnrs_cpu), np.std(esis_cpu)
 
+        # Average metrics for this epoch
+        avg_psnr, avg_ssim, avg_esi = np.mean(psnrs_cpu), np.mean(ssims_cpu), np.mean(esis_cpu)
+
+        # Calculate combined score
+        avg_combined_score = combined_score(avg_psnr, avg_ssim, avg_esi)
+
         # Calculate time taken for this epoch
         epoch_time = time.time() - start_time
 
         # Store for future analysis if needed
         epoch_times.append(epoch_time)  
 
-        # Logging for each epoch
-        print(f" Epoch {epoch+1}/{num_epochs} - Time: {epoch_time:.2f}s")
-        print(f" Loss Weights:   {loss_weights.weights}")
-        print(f" Average PSNR:   {avg_psnr:.4f} (Min: {min_psnr:.4f}, Max: {max_psnr:.4f}, Std: {std_psnr:.4f}, Epoch Avg: {avg_psnr_epoch:.4f})")
-        print(f" Average SSIM:   {avg_ssim:.4f} (Min: {min_ssim:.4f}, Max: {max_ssim:.4f}, Std: {std_ssim:.4f}, Epoch Avg: {avg_ssim_epoch:.4f})")
-        print(f" Average ESI:    {avg_esi:.4f}  (Min: {min_esi:.4f},  Max: {max_esi:.4f},  Std: {std_esi:.4f},  Epoch Avg: {avg_esi_epoch:.4f})")
-        print(f" Combined Score: {combined_score(avg_psnr, avg_ssim, avg_esi):.4f}")
-        print(f" Generator Loss: {gen_loss:.4f}, Discriminator Loss: {dis_loss:.4f}")
+        # Update loss weights based on performance
+        improvement_threshold = 0.01  # 1% improvement
+        
+        # Performance metrics
+        performance_metrics = {
+            'psnr': {'improved': avg_psnr > best_psnr * (1 + improvement_threshold), 'magnitude': abs(avg_psnr - best_psnr)},
+            'ssim': {'improved': avg_ssim > best_ssim * (1 + improvement_threshold), 'magnitude': abs(avg_ssim - best_ssim)},
+            'esi':  {'improved': avg_esi  > best_esi  * (1 + improvement_threshold), 'magnitude': abs(avg_esi - best_esi)}
+        }
 
-        writer.add_scalar('Validation/Avg_PSNR', avg_psnr, global_step=epoch)
-        writer.add_scalar('Validation/Avg_SSIM', avg_ssim, global_step=epoch)
-        writer.add_scalar('Validation/Avg_ESI',  avg_esi,  global_step=epoch)
-        writer.add_histogram('Generator/First_Layer_Weights', list(generator.parameters())[0], global_step=epoch)
-        writer.add_scalar('Learning Rate/Generator', gen_optim.param_groups[0]['lr'], global_step=epoch)
-        writer.add_scalar('Learning Rate/Discriminator', dis_optim.param_groups[0]['lr'], global_step=epoch)
-        writer.flush()
+        # Logging for each epoch 
+        print("")
+        print(f" Epoch:                {epoch + 1}/{num_epochs} - Time: {epoch_time:.2f}s")
+        print(f" Epoch Loss Weights:   {loss_weights.weights}")
+        print(f" Epoch Average PSNR:   {avg_psnr:.4f} (Min: {min_psnr:.4f}, Max: {max_psnr:.4f}, Std: {std_psnr:.4f})")
+        print(f" Epoch Average SSIM:   {avg_ssim:.4f} (Min: {min_ssim:.4f}, Max: {max_ssim:.4f}, Std: {std_ssim:.4f})")
+        print(f" Epoch Average ESI:    {avg_esi:.4f}  (Min: {min_esi:.4f},  Max: {max_esi:.4f},  Std: {std_esi:.4f})")
+        print(f" Epoch Combined Score: {avg_combined_score:.4f}")
+        print(f" Losses:               Generator -> {gen_loss:.4f}, Discriminator -> {dis_loss:.4f}")
+        print(f" Epoch Learning Rate:  Generator -> {gen_optim.param_groups[0]['lr']:.4f}, Discriminator -> {dis_optim.param_groups[0]['lr']:.4f}")
+        print(f" Epoch Performance:    {performance_metrics}")
 
-        # Reset for next epoch
+        # Update loss weights
+        if epoch > 0:
+            loss_weights.update_weights(performance_metrics, epoch, num_epochs)
+
+        # Normalize weights every N epochs
+        if (epoch + 1) % 10 == 0:
+            loss_weights.normalize_weights()
+        
+        # Save model checkpoints at regular intervals and best models
+        save_checkpoint = False
+        
+        # If the average PSNR for this epoch is higher than the best seen so far, update best_psnr
+        if avg_psnr > best_psnr:
+            best_psnr = avg_psnr
+            save_checkpoint = True
+
+        # If the average SSIM for this epoch is higher than the best seen so far, update best_ssim
+        if avg_ssim > best_ssim:
+            best_ssim = avg_ssim
+            save_checkpoint = True
+        
+        # If the average ESI for this epoch is higher than the best seen so far, update best_esi
+        if avg_esi > best_esi:
+            best_esi = avg_esi
+            save_checkpoint = True
+        
+        # If the combined score for this epoch is higher than the best seen so far, update best_combined_score
+        if avg_combined_score > best_combined_score:
+            best_combined_score = avg_combined_score
+            save_checkpoint     = True
+        
+        # Save model checkpoints at regular intervals and best models
+        if save_checkpoint:
+            MODEL_NAME = f"dh_model_e_{epoch}{loss_weights.get_weights_as_string()}.pth"
+
+            print(f"Saving model checkpoint at epoch {epoch + 1}...")
+            torch.save(generator.state_dict(), os.path.join(MODEL_PATH, MODEL_NAME))
+
+        # Early stopping if there's no improvement in the average PSNR, SSIM, or ESI for a certain number of epochs
+        if save_checkpoint:
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+
+        # Break if there's no improvement for a certain number of epochs
+        if epochs_no_improve >= patience:
+            print(f"Early stopping at epoch {epoch} due to no improvement.")
+            break
+
+        # Reset for next epoch 
         psnrs.clear()
         ssims.clear()
         esis.clear()
-
+        
         # Check for early stopping
         if epochs_no_improve >= patience:
             print("An early stopping here?!")
             #break
-        
+
         # Step the learning rate scheduler
         gen_scheduler.step()
         dis_scheduler.step()
 
-    hparam_dict = {'lr': generator_lr, 'batch_size': batch_size}
-    metric_dict = {'best_psnr': best_psnr}
-
-    writer.add_hparams(hparam_dict, metric_dict)
-
-    writer.close()
-
+    print(f"Average time per epoch: {np.mean(epoch_times):.2f}s")
+    print(f"Final Loss Weights:     {loss_weights.weights}")
 
 ####################################################################################################
 # Main
@@ -882,7 +707,7 @@ if __name__ == "__main__":
     generator, discriminator = instantiate_networks()
 
     # Initialize optimizers
-    gen_optim, dis_optim = init_optimizer(generator, discriminator, generator_lr, discriminator_lr)
+    gen_optim, dis_optim = init_optimizer(generator, discriminator)
 
     # Train the network
-    network_training(train_dataloader, generator, discriminator, gen_optim, dis_optim, loss_weights, num_epochs)
+    network_training(train_dataloader, val_dataloader, generator, discriminator, gen_optim, dis_optim)
