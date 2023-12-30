@@ -47,7 +47,7 @@ class DisplacementMapDataset(Dataset):
                 # Increment the counter and log every 100 pairs
                 self.counter += 1
 
-                if self.counter % 1000 == 0:
+                if self.counter % 10000 == 0:
                     print(f"Processed {self.counter} pairs. Current pair: {intact_image_path}, {damaged_image_path}")
                 
                 return intact_image, damaged_image

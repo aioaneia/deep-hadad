@@ -32,8 +32,9 @@ Thumbs.db
 
 # Image files
 ######################
-/data/training_dataset/*
 /data/small_training_dataset/*
+/data/medium_training_dataset/*
+/data/large_training_dataset/*
 /data/Inscriptions/*
 /data/inscriptions_dataset/*
 /data/-> Archive/*

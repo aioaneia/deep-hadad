@@ -71,3 +71,28 @@
 ### Domain-Specific Customization: 
 * Tailor the network to suit the specific characteristics of your displacement maps and inscriptions, 
 * as domain-specific nuances can significantly impact performance.
+
+
+
+
+
+caler = GradScaler() 
+
+for epoch in epochs:
+
+    for input, target in data_loader:
+        
+        optimizer.zero_grad()
+        
+        # Wrap model call and loss calc in context manager   
+        with autocast(): 
+            output = model(input)
+            loss = loss_fn(output, target)
+            
+        # Scales loss and runs backward pass under scaler context 
+        scaler.scale(loss).backward()
+        
+        # Unscales gradients and calls optimizer step 
+        scaler.step(optimizer) 
+        scaler.update()
+

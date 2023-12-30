@@ -8,6 +8,11 @@ from torch.nn                     import InstanceNorm2d, Sigmoid, Conv2d, ReLU, 
 from torch.nn.utils.spectral_norm import spectral_norm
 from torch.nn.init                import kaiming_normal_, xavier_normal_, orthogonal_
 
+from attention_mechanisms.MultiHeadAttention import MultiHeadAttention
+from attention_mechanisms.SelfAttention      import SelfAttention
+from attention_mechanisms.SpatialAttention   import SpatialAttention
+from attention_mechanisms.ChannelAttention   import ChannelAttention
+
 #Alternative Attention Mechanisms
 
 # Convolutional Block Attention Module (CBAM):
@@ -27,57 +32,6 @@ from torch.nn.init                import kaiming_normal_, xavier_normal_, orthog
 # Layer Attention:
 
 # Instead of applying attention within a layer, layer attention mechanisms aggregate information across different layers. This can be particularly effective in U-Net architectures where features from different scales are combined.
-
-
-####################################################################################################
-# Self-Attention Layer
-####################################################################################################
-class SelfAttention(nn.Module):
-    def __init__(self, in_channels):
-        super(SelfAttention, self).__init__()
-
-        # Define the key, query, and value convolution layers
-        self.query_conv = Conv2d(in_channels, in_channels // 8, 1)
-        self.key_conv   = Conv2d(in_channels, in_channels // 8, 1)
-        self.value_conv = Conv2d(in_channels, in_channels, 1)
-
-        # Check if CUDA (GPU) is available
-        if torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device("cpu")
-
-        # Scale factor to ensure stable gradients, as suggested by the Attention is All You Need paper
-        self.scale = torch.sqrt(torch.FloatTensor([in_channels // 8])).to(self.device)
-
-        # Gamma parameter for learnable interpolation between input and attention
-        self.gamma = nn.Parameter(torch.zeros(1))
-
-
-    def forward(self, x):
-        batch_size, channels, width, height = x.size()
-
-        # Flatten the spatial dimensions and compute query, key, value
-        query = self.query_conv(x).view(batch_size, -1, width * height).permute(0, 2, 1)
-        key   = self.key_conv(x).view(batch_size, -1, width * height)
-        value = self.value_conv(x).view(batch_size, -1, width * height)
-
-        self.scale = self.scale.to(self.device)
-
-        # Compute attention and apply softmax
-        attention = torch.bmm(query, key) / self.scale
-        attention = F.softmax(attention, dim=-1)
-
-        # Apply attention to the value
-        out = torch.bmm(value, attention.permute(0, 2, 1))
-
-        # Reshape the output and apply gamma
-        out = out.view(batch_size, channels, width, height)
-
-        # Learnable interpolation between input and attention output
-        out = self.gamma * out + x
-
-        return out
 
 
 ####################################################################################################
@@ -101,44 +55,6 @@ class ResidualBlock(Module):
     def forward(self, x):
         return x + self.block(x)
 
-class ChannelAttention(nn.Module):
-    def __init__(self, in_channels, ratio=16):
-        super(ChannelAttention, self).__init__()
-
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.max_pool = nn.AdaptiveMaxPool2d(1)
-
-        self.fc1   = Conv2d(in_channels, in_channels // ratio, 1, bias=False)
-        self.relu1 = ReLU()
-        self.fc2   = Conv2d(in_channels // ratio, in_channels, 1, bias=False)
-
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        avg_out = self.fc2(self.relu1(self.fc1(self.avg_pool(x))))
-        max_out = self.fc2(self.relu1(self.fc1(self.max_pool(x))))
-        out     = avg_out + max_out
-
-        return self.sigmoid(out)
-
-class SpatialAttention(nn.Module):
-    def __init__(self, kernel_size=7):
-        super(SpatialAttention, self).__init__()
-
-        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
-
-        padding = 3 if kernel_size == 7 else 1
-
-        self.conv1   = Conv2d(2, 1, kernel_size, padding=padding, bias=False)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        avg_out    = torch.mean(x, dim=1, keepdim=True)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        x          = torch.cat([avg_out, max_out], dim=1)
-        x          = self.conv1(x)
-
-        return self.sigmoid(x)
     
 class CBAM(nn.Module):
     def __init__(self, in_planes, ratio=16, kernel_size=7):
@@ -196,7 +112,7 @@ class DHadadGenerator(Module):
         self.self_attention_1024 = SelfAttention(filter_sizes[7]) # 1024
 
         # Initialize Multi-Head Attention
-        #self.multi_head_attention = MultiHeadAttention(in_channels=512, num_heads=8, dropout=dropout_prob)
+        self.multi_head_attention = MultiHeadAttention(in_channels=512, num_heads=8, dropout=dropout_prob)
 
     # Initialize encoder
     def initialize_encoder(self, in_channels, filter_sizes, num_residual_blocks):
@@ -205,7 +121,7 @@ class DHadadGenerator(Module):
         
         # Residual blocks for encoder
         self.res_blocks_enc = nn.ModuleList()
-
+        
         # CBAM modules for encoder
         self.cbam_blocks_enc = nn.ModuleList()  
 
@@ -289,6 +205,19 @@ class DHadadGenerator(Module):
                 
                 # Apply CBAM after each encoder layer
                 x = self.cbam_blocks_enc[idx - 3](x)
+
+            # # Apply multi-head attention at a suitable position
+            # if idx == 6:  # 512    
+            #     # Reshape x for MultiHeadAttention
+            #     batch_size, channels, height, width = x.shape
+            #     # Reshaping to [batch_size, seq_len, feature_dim]
+            #     x = x.view(batch_size, height * width, channels)
+
+            #     # Apply MultiHeadAttention
+            #     x = self.multi_head_attention(x)
+
+            #     # Reshape back to original dimensions if needed
+            #     x = x.view(batch_size, channels, height, width)
 
             # Skip connection except for the last layer
             if idx < len(self.encoders) - 1:
@@ -414,9 +343,16 @@ class DHadadDiscriminator(Module):
 
     # Forward pass
     def forward(self, x):
-        for layer in self.layers:
+        for idx, layer in enumerate(self.layers):
             x = layer(x)
 
+            #print(f"Layer {idx} output shape: {x.shape}")
+            
+            # Checking for NaNs after each layer
+            if torch.isnan(x).any():
+                print(f"NaNs detected at layer {idx}")
+                #return torch.zeros_like(x)  # Early return with a default value
+        
             # Apply self-attention after the second layer
             # if layer == self.layers[2]:
             #     x = self.self_attention_96(x)
@@ -425,7 +361,14 @@ class DHadadDiscriminator(Module):
             if layer == self.layers[6]:
                 x = self.self_attention_512(x)
 
-        return self.final_conv(x)
+                # Checking for NaNs after self-attention
+                if torch.isnan(x).any():
+                    print("NaNs detected after self-attention layer")
+                    #return torch.zeros_like(x)  # Early return with a default value
+        
+        x = self.final_conv(x)
+
+        return x
     
     # Function to initialize weights
     def initialize_weights(self, m):
@@ -441,3 +384,4 @@ class DHadadDiscriminator(Module):
         if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
+

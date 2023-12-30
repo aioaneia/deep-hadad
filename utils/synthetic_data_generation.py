@@ -1,14 +1,9 @@
 import os
 import sys
 import cv2 
-import glob
-import numpy as np
-import configparser
 import logging
 import multiprocessing
-
-from matplotlib import pyplot as plt
-from PIL import Image
+import configparser
 
 # Add project path to sys.path
 sys.path.append('./')
@@ -32,7 +27,7 @@ batch_size              = None
 # 'DEFAULT' paths section
 # - Constants for data generation
 ####################################################################################################
-def init_default_paths(project_dir='./', dataset_size='small'):
+def init_default_paths(project_dir='./', dataset_size='medium'):
     global project_path, displacement_maps_path, x_training_dataset_path, y_training_dataset_path
     global paths, num_pairs, batch_size
 
@@ -91,23 +86,30 @@ def save_paired_image(x_depth_image, y_depth_image, x_path, y_path, batch_index,
 ####################################################################################################
 # Generate an image pair for specified image
 # Returns a tuple of (intact, damaged) images
+# - Type: 'degradation' or 'enhancement'
 ####################################################################################################
-def generate_pair_for_image(image):
+def generate_pair_for_image(image, type='enhancement'):
     if image is None:
         raise ValueError("Input image is None")
 
-    # Select degradation level
-    level = ip.degradation_level_selector()
+    pair_image = None
 
-    # Apply degradations based on the selected level
-    damaged = ip.apply_degradation_based_on_level(image.copy(), level)
+    if type == 'degradation':
+        # Select degradation level
+        level = ip.degradation_level_selector()
+
+        # Apply degradations based on the selected level
+        pair_image = ip.apply_degradation_based_on_level(image.copy(), level)
+    elif type == 'enhancement':
+        # Sharpen the image and add it to the list
+        pair_image = ip.sharp_imgage(image.copy())
 
     # Ensure that a valid image is returned
-    if damaged is None:
-        raise ValueError("Degradation function returned None")
+    if pair_image is None:
+        raise ValueError("Function returned None")
 
-    # Return the pair of images (intact, damaged)
-    return image, damaged
+    # Return the pair of images
+    return image, pair_image
 
 ####################################################################################################
 # Generate synthetic displacement maps
@@ -119,15 +121,19 @@ def generate_synthetic_maps(displacement_maps, num_pairs=10):
     for i in range(len(displacement_maps)):
         # Iterate through each pair
         for j in range(num_pairs):
-            # Generate intact-damaged pair
-            x_depth_image, y_depth_image = generate_pair_for_image(displacement_maps[i])
+            # Generate real-enhanced pair
+            x_depth_image, y_depth_image = generate_pair_for_image(displacement_maps[i], type='enhancement')
 
-            # Save intact-damaged pair
+            # Save real-enhanced pair
             save_paired_image(
                 x_depth_image, y_depth_image, 
                 x_training_dataset_path, y_training_dataset_path, 
                 i, j
             )
+
+            # generate real-degraded pair
+            #x_depth_image, y_depth_image = generate_pair_for_image(displacement_maps[i], type='degradation')
+
     
     logging.info("Data generation completed.")
 
@@ -144,10 +150,6 @@ def generate_synthetic_maps_batch(batch_data):
         for j in range(num_pairs):
             # Generate intact-damaged pair
             x_depth_image, y_depth_image = generate_pair_for_image(displacement_map)
-
-            # print(f"Saving batch {batch_index}, pair {j + i * num_pairs}")
-            # print(f"x training dataset path {x_path}")
-            # print(f"y training dataset path {y_path}")
 
             # Save intact-damaged pair with unique identifiers
             save_paired_image(
@@ -261,8 +263,8 @@ def load_displacement_maps_from_directory(path):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    # Initialize paths
-    init_default_paths()
+    # Initialize paths and global variables
+    init_default_paths(dataset_size='small')
 
     print(f"Project Path:            {project_path}")
     print(f"Displacement Maps Path:  {displacement_maps_path}")
@@ -282,4 +284,4 @@ if __name__ == "__main__":
     validate_generated_data()
 
     # Display sample pairs
-    display_sample_pairs(num_pairs=5)
+    display_sample_pairs(num_pairs=7)

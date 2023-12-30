@@ -433,14 +433,20 @@ def resize_with_aspect_ratio(image, target_size=(512, 512), background_value=0):
 def sharp_imgage(image):
     # Define a sequence of augmentations
     seq = iaa.Sequential([
+        # Beneficial for enhancing contrast in images
+        #iaa.AllChannelsHistogramEqualization(),
+
+        # Improve contrast
+        iaa.ContrastNormalization(1.1), 
+        
         # Adjusting brightness and contrast nonlinearly
-        iaa.GammaContrast((0.5, 0.8)),
+        iaa.GammaContrast(0.9), # 1.5
 
         # Emphasizing edges the in displacement map, 
-        iaa.Sharpen(alpha=(0.8, 1), lightness=1),
+        iaa.Sharpen(alpha=1, lightness=(1.1)),
 
         # Enhance texture 
-        #iaa.Emboss(alpha=(0.5, 1), strength=1)
+        iaa.Emboss(alpha=(0.4, 0.7), strength=1.0),
     ])
 
     # Apply augmentations
