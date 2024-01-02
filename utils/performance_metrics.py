@@ -1,5 +1,6 @@
 
 import cv2
+import time
 
 import torch
 import torch.nn.functional as F
@@ -125,72 +126,27 @@ def combined_score(psnr, ssim, edge_similarity, weights = [0.4, 0.3, 0.3]):
     return total_score
 
 
-########################################################################################
-# Define Evaluation Functions
-# Gradient Penalty
-# The gradient penalty is typically used in the context of Wasserstein GANs
-# with Gradient Penalty (WGAN-GP).
-# It enforces the Lipschitz constraint by penalizing the gradient norm
-# of the discriminator's output with respect to its input.
-########################################################################################
-def compute_gradient_penalty(discriminator, fake_samples, real_samples):
-    # Random weight term for interpolation between real and fake samples
-    alpha = torch.rand((real_samples.size(0), 1, 1, 1), device=real_samples.device)
+def print_performance_metrics(epoch, num_epochs, epoch_time, loss_weights,
+                            avg_psnr, min_psnr, max_psnr, std_psnr,
+                            avg_ssim, min_ssim, max_ssim, std_ssim,
+                            avg_esi, min_esi, max_esi, std_esi,
+                            avg_combined_score, performance_metrics,                          
+                            gen_loss, dis_loss, gen_optim, dis_optim):
+    print("")
+    print(f" Epoch:                    {epoch}/{num_epochs}")
+    print(f" Time:                     {epoch_time:.2f}s Current: {time.strftime('%H:%M:%S', time.gmtime())}")
+    print(f" Epoch Loss Weights:       {loss_weights.weights}")
+    print(f" Epoch Average PSNR:       {avg_psnr:.4f} (Min: {min_psnr:.4f}, Max: {max_psnr:.4f}, Std: {std_psnr:.4f})")
+    print(f" Epoch Average SSIM:       {avg_ssim:.4f} (Min: {min_ssim:.4f}, Max: {max_ssim:.4f}, Std: {std_ssim:.4f})")
+    print(f" Epoch Average ESI:        {avg_esi:.4f}  (Min: {min_esi:.4f},  Max: {max_esi:.4f},  Std: {std_esi:.4f})")
+    print(f" Epoch Combined Score:     {avg_combined_score:.4f}")
+    print(f" Epoch Generator Loss:     {gen_loss.item():.4f}")
+    print(f" Epoch Discriminator Loss: {dis_loss.item():.4f}")
+    print(f" Epoch Generator LR:       {gen_optim.param_groups[0]['lr']:.6f}")
+    print(f" Epoch Discriminator LR:   {dis_optim.param_groups[0]['lr']:.6f}")
+    print(f" Epoch Performance:        {performance_metrics}")
+    print("")
 
-    # Get random interpolation between real and fake samples
-    interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
-    
-    # Logging shapes and checking for NaNs
-    #print("Interpolates Shape: ", interpolates.shape)
-
-    if torch.isnan(interpolates).any():
-        print("NaNs in interpolates")
-        #return torch.tensor(0.0).to(real_samples.device)  # Early return with a default value
-
-    d_interpolates = discriminator(interpolates)
-
-    if d_interpolates.grad_fn is None:
-        print("d_interpolates does not have a valid grad_fn")
-        #return torch.tensor(0.0).to(real_samples.device)
-
-    # Checking for NaNs after discriminator
-    if torch.isnan(d_interpolates).any():
-        print("NaNs in discriminator output")
-        #return torch.tensor(0.0).to(real_samples.device)  # Early return with a default value
-    
-    #fake = torch.ones(d_interpolates.size(), requires_grad=False, device=real_samples.device)
-    grad_outputs = torch.ones_like(d_interpolates)
-
-    # Get gradient w.r.t. interpolates
-    gradients = torch.autograd.grad(
-        outputs      = d_interpolates,
-        inputs       = interpolates,
-        grad_outputs = grad_outputs,
-        create_graph = True,
-        retain_graph = True,
-        only_inputs  = True
-        #allow_unused = True # This allows for the case where some inputs might not affect outputs
-    )[0]
-
-    # Handling the case where gradients might be None
-    if gradients is None:
-        print("No gradients found for interpolates")
-        #return torch.tensor(0.0).to(real_samples.device)
-    
-    # Checking for NaNs in gradients
-    if torch.isnan(gradients).any():
-        print("NaNs in gradients")
-        #return torch.tensor(0.0).to(real_samples.device)  # Early return with a default value
-
-    gradients        = gradients.view(gradients.size(0), -1)
-    gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
-
-    # Checking for NaNs in gradient penalty
-    if torch.isnan(gradient_penalty):
-        print("NaNs in gradient penalty")
-        #return torch.tensor(0.0).to(real_samples.device)  # Early return with a default value
-
-    return gradient_penalty
 
 ########################################################################################
 # Main

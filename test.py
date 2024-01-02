@@ -3,27 +3,27 @@ sys.path.append('./')
 
 import matplotlib.pyplot  as plt
 import torch
-
+import cv2
 import glob
 import os
+import numpy as np
 
 from torchvision.transforms import ToPILImage, Compose, Resize, Lambda, ToTensor
 
 from PIL         import Image
-from torchvision import datasets
 
 # import the networks
-import core.networks as dh_networks
+from core.DHadadGenerator import DHadadGenerator
 
 # Constants
 PROJECT_PATH      = './'
 test_dataset_path = PROJECT_PATH + "data/test_dataset/"
-est_dataset_path = PROJECT_PATH + "data/test_dataset/Est"
+est_dataset_path = PROJECT_PATH + "data/test_dataset/Estimation"
 
 IMAGE_EXTENSIONS      = [".png", ".jpg", ".tif"]
 
 MODEL_PATH   = PROJECT_PATH + 'models/'
-MODEL_NAME   = 'dh_delta_model_ep_19_a0.05_b0.05_g0.18_d0.07_e0.05_z0.02_e0.08.pth'
+MODEL_NAME   = 'dh_depth_model_ep_3_r1.00_p0.80_a0.50_g1.50_d1.20_s1.00.pth'
 
 transform = Compose([
   Resize((512, 512)),
@@ -65,7 +65,7 @@ def load_dh_generator():
     gen_out_channels = 1  # to generate grayscale restored images, change as needed
 
     # Instantiate the generator with the specified channel configurations
-    generator = dh_networks.DHadadGenerator(gen_in_channels, gen_out_channels)
+    generator = DHadadGenerator(gen_in_channels, gen_out_channels)
 
     return generator
 
@@ -134,21 +134,27 @@ def generate_restored_images(generator, test_dataset):
     table_images = []
 
     for image_path in test_dataset:
-        # Load the depth image
-        image = Image.open(image_path).convert("L")
+        # Load the depth map
+        #image = Image.open(image_path).convert("L")
+        d_map = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         
+        # Convert the NumPy array to a PIL Image
+        d_map = Image.fromarray(d_map)
+
         # Transform the image
-        image_tensor = transform(image).to(device)
+        image_tensor = transform(d_map).to(device)
 
         # Generate the restored image
         restored_image = generate_restored_image(generator, image_tensor, invert_pixel_values=False)
 
+        #render_image = np.concatenate((image, displacement_map), axis=2)
+
         # Add the restored image to the list
         table_images.append({
-            'org_image':    image,
-            'ground_truth': image,
-            'est_image':    image,
-            'res_label':    to_pil(restored_image)
+            'org_image':    d_map,
+            'ground_truth': d_map,
+            'est_image':    d_map,
+            'res_image':    to_pil(restored_image)
         })
 
     return table_images
@@ -192,7 +198,7 @@ def plot_images(table_images, cmap='gray'):
         axes[i, 2].axis('off')
 
         # Show restored image
-        axes[i, 3].imshow(table_image['res_label'], cmap=cmap)
+        axes[i, 3].imshow(table_image['res_image'], cmap=cmap)
         axes[i, 3].set_title('Restored Image')
         axes[i, 3].axis('off')
 

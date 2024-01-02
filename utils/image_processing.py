@@ -7,14 +7,25 @@ import configparser
 import logging
 import imgaug.augmenters as iaa
 
+from scipy.stats import ks_2samp
 from matplotlib import pyplot as plt
 from tqdm import tqdm
+from PIL         import Image
 
-##################
-# Global variables
-##################
+import albumentations as A
+
 IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".tif'", ".tiff", ".bmp"]
 
+project_path = "./"
+
+# Read the config file
+config = configparser.ConfigParser()
+config.read(project_path + 'config.ini')
+
+dataset_size='small'
+
+x_training_dataset_path = project_path + config['DEFAULT'][f'{dataset_size.upper()}_X_TRAINING_DATASET_PATH']
+y_training_dataset_path = project_path + config['DEFAULT'][f'{dataset_size.upper()}_Y_TRAINING_DATASET_PATH']
 
 ####################################################################################################
 # Function to get image from paths
@@ -550,8 +561,8 @@ def apply_degradation_based_on_level(image, level):
             (erode_image, {'kernel_size_range': (3, 8), 'intensity': 0.8, 'kernel_shape': cv2.MORPH_ELLIPSE, 'iterations_range': (1, 3)}),
             (dilate_image, {'kernel_size_range': (3, 6), 'intensity': 1.0, 'inscription_mask': None, 'iterations': 1}),
             (stretch_image, {'x_factor_range': (0.6, 1.3), 'y_factor_range': (0.6, 1.3)}),
-            (skew_image, {'x_skew_range': (0.6, 1.3), 'y_skew_range': (0.6, 1.3)}),
-            #(simulate_discoloration_and_texture, {'discoloration_intensity': 0.2, 'texture_intensity': 0.2}),
+            #(skew_image, {'x_skew_range': (0.6, 1.3), 'y_skew_range': (0.6, 1.3)}),
+            (simulate_discoloration_and_texture, {'discoloration_intensity': 0.2, 'texture_intensity': 0.2}),
             #(simulate_cracks, {'num_cracks_range': (3, 5), 'max_length': 100, 'crack_types': ['branching', 'wide']}), # Heavier crack simulation
             #(simulate_text_fading, {'num_areas_range': (1, 4), 'area_size_range': (10, 40), 'fading_intensity_range': (0.1, 0.6)}),
             #(simulate_bumps_and_scratches, {'intensity': 0.8, 'scratches': False}) # Heavier bump and scratch simulation
@@ -584,6 +595,7 @@ def load_displacement_maps(path, target_size=(512, 512)):
     
     displacement_maps = []
     map_paths         = glob.glob(os.path.join(path, '*.png')) + glob.glob(os.path.join(path, '*.tif'))
+    map_paths         = sorted(map_paths)
 
     for map_path in tqdm(map_paths, desc="Loading displacement maps"):
         # Load displacement map as a grayscale image
@@ -659,8 +671,8 @@ def display_images(images, num_cols=4, img_size=(200, 200), titles=None, cmap='g
         img = images[i]
 
         # Resize and convert image
-        small_img      = cv2.resize(img, img_size)
-        small_img_norm = cv2.normalize(small_img, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        small_img_norm      = cv2.resize(img, img_size)
+        #small_img_norm = cv2.normalize(small_img, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
 
         plt.subplot(num_rows, num_cols, i + 1)
 
@@ -683,72 +695,209 @@ def display_images(images, num_cols=4, img_size=(200, 200), titles=None, cmap='g
 ####################################################################################################
 def validate_intensity_distribution(real_images, synthetic_images):
     synthetic_intensities = [img.mean() for img in synthetic_images]
-    real_intensities = [img.mean() for img in real_images]
+    real_intensities      = [img.mean() for img in real_images]
 
     # Compare distributions, e.g., using Kolmogorov-Smirnov test
-    from scipy.stats import ks_2samp
     ks_statistic, p_value = ks_2samp(synthetic_intensities, real_intensities)
+
     if p_value < 0.05:
         print("Distributions differ significantly.")
+        return False
     else:
         print("No significant difference in distributions.")
+        return True
 
+# Define a pipeline of augmentation operations for enhancing displacement maps
+enhacement_augmentation_pipeline = A.Compose([
+    A.RandomBrightnessContrast(brightness_limit=(0.0, 0.0), contrast_limit = (-0.1, 0.1), always_apply=True),
+    A.Sharpen(alpha = (0.8, 1.0), lightness = (1.0, 1.0), always_apply=True),
+    A.Emboss(alpha = (0.9, 1.0), strength = (0.9, 1.0), always_apply = True)
+])
+
+# Define a pipeline of augmentation operations for damaging displacement maps
+damaging_augmentation_pipeline = A.Compose([
+    A.RandomBrightnessContrast(brightness_limit=(0.0, 0.0), contrast_limit = (-0.1, 0.1), always_apply=True),
+    A.GaussNoise(var_limit=(10, 50), p=0.5),
+    A.RandomGamma(gamma_limit=(50, 150), p=0.5),
+    A.Sharpen(alpha = (0.5, 0.8), lightness = (1.0, 1.0), always_apply=True),
+    A.ElasticTransform(alpha=1, sigma=50, alpha_affine=50, p=0.5),
+    A.CoarseDropout(max_holes=8, max_height=8, max_width=8, min_holes=2, fill_value=0, p=0.5),
+])
+
+def augment_image(image, pipeline=enhacement_augmentation_pipeline):
+    return pipeline(image=image)['image']
+
+
+####################################################################################################
+# Save save_paired_image
+####################################################################################################
+def save_paired_image(input_image, target_image, x_path, y_path, batch_index, pair_index):
+    # Construct unique filenames for the x and y images
+    filename_x = f"input_batch_{batch_index}_pair_{pair_index}.png"
+    filename_y = f"target_batch_{batch_index}_pair_{pair_index}.png"
+
+    # Save the images
+    cv2.imwrite(os.path.join(x_path, filename_x), input_image)
+    cv2.imwrite(os.path.join(y_path, filename_y), target_image)
+
+
+def load_pairs_of_est_ground(input_displacement_maps_path, target_displacement_maps_path):
+    input_displacement_maps   = []
+    target_displacement_maps      = []
+
+    # Load ground displacement maps
+    input_displacement_maps  += load_displacement_maps(input_displacement_maps_path)
+    target_displacement_maps += load_displacement_maps(target_displacement_maps_path)
+
+    # Display ground images
+    display_images(input_displacement_maps, first_n=5)
+
+    # Generate synthetic enhanced displacement maps from ground displacement maps
+    for i, displacement_map in enumerate(target_displacement_maps):
+        # Sharpen the estimated displacement map
+        target_d_map = augment_image(target_displacement_maps[i], pipeline=enhacement_augmentation_pipeline)
+
+        for j in range(10):
+            #enhanced_displacement_map_v1 = sharp_imgage(est_displacement_map)
+            input_d_map = augment_image(input_displacement_maps[i], pipeline=damaging_augmentation_pipeline)
+
+            # Display images
+            #display_images([enhanced_est_d_map, ground_d_map], first_n=5, titles=["Estimated", "Ground"], num_cols=3)
+
+            save_paired_image(
+                input_d_map, 
+                target_d_map, 
+                x_training_dataset_path, 
+                y_training_dataset_path, 
+                i, j)
 
 ####################################################################################################
 # Test displacement maps from directory
 ####################################################################################################
-def test_displacement_maps_generation(path):
+def test_displacement_maps_generation(ground_displacement_maps_path, estimated_displacement_maps_path):
     validation = False
-    ground_displacement_maps = []
-    x_displacement_maps      = []
+    ground_displacement_maps   = []
+    est_displacement_maps      = []
+    enhanced_displacement_maps = []
 
-    # Iterate through each subdirectory in the path
-    for subdir, dirs, files in os.walk(path):
-        for dir in dirs:
-            full_dir_path      = os.path.join(subdir, dir)
-            ground_displacement_maps += load_displacement_maps(full_dir_path)
+    # Load ground displacement maps
+    ground_displacement_maps += load_displacement_maps(ground_displacement_maps_path)
+    est_displacement_maps    += load_displacement_maps(estimated_displacement_maps_path)
 
     # Display ground images
-    display_images(ground_displacement_maps)
+    display_images(ground_displacement_maps, first_n=5)
 
-    # Generate x synthetic displacement maps
+    # Generate synthetic enhanced displacement maps from ground displacement maps
     for i, displacement_map in enumerate(ground_displacement_maps):
-        # Sharpen the image
-        x_displacement_maps.append(sharp_imgage(displacement_map.copy()))
 
-
-    # Display X images
-    display_images(x_displacement_maps)
-
-    #Generate the y synthetic displacement maps
-    for i, displacement_map in enumerate(ground_displacement_maps):
-        synthetic_displacement_maps = []
+        # Estimated displacement map
+        
+        # Ground displacement map
+        ground_displacement_map = augment_image(ground_displacement_maps[i], pipeline=enhacement_augmentation_pipeline)
 
         for j in range(10):
+            # Sharpen the estimated displacement map
+            #enhanced_displacement_map_v1 = sharp_imgage(est_displacement_map)
+            enhanced_est_displacement_map = augment_image(est_displacement_maps[i], pipeline=damaging_augmentation_pipeline)
+
+            enhanced_displacement_maps.append(enhanced_est_displacement_map)
+
+            # Display images
+            display_images([enhanced_est_displacement_map, ground_displacement_map], first_n=5, titles=["Estimated", "Ground"], num_cols=3)
+
+
+    #Generate synthetic damaged displacement maps from ground displacement maps
+    for i, displacement_map in enumerate(ground_displacement_maps):
+        synthetic_damaged_displacement_maps = []
+
+        for j in range(5):
             # Select test degradation level
-            level = 3
+            level = 2
 
             # Apply degradations based on the selected level
-            damaged_displacement_map = apply_degradation_based_on_level(displacement_map.copy(), level)
-
-            #Apply imgaug augmentations
-            damaged_displacement_map = apply_imgaug_augmentations(damaged_displacement_map)
+            damaged_displacement_map_v1 = apply_degradation_based_on_level(displacement_map.copy(), level)
+            damaged_displacement_map_v2 = damaging_augmentation_pipeline(image=displacement_map.copy())['image']
 
             # Validate intensity distribution
-            validate_intensity_distribution([displacement_map], [damaged_displacement_map])
+            validate_intensity_distribution([displacement_map], [damaged_displacement_map_v1])
 
             # Display image
-            display_images([displacement_map, damaged_displacement_map], titles=[f"Level {level}"])
+            display_images([damaged_displacement_map_v1, damaged_displacement_map_v2, displacement_map], titles=["Damaged v1", "Damaged v2", "Original"])
 
             # Add to list of synthetic displacement maps
-            synthetic_displacement_maps.append(damaged_displacement_map)
+            synthetic_damaged_displacement_maps.append(damaged_displacement_map_v1)
         
         # Display images
-        display_images(synthetic_displacement_maps)
+        display_images(synthetic_damaged_displacement_maps)
 
     return validation
 
+def apply_depth_to_rgb(rgb_image, depth_map):
+    """
+    Apply the enhanced depth map to the RGB image as a shading layer.
+    
+    Args:
+    - rgb_image: Original RGB image as a NumPy array.
+    - depth_map: Enhanced depth map as a NumPy array.
 
+    Returns:
+    - shaded_rgb: RGB image with depth shading applied.
+    """
+
+    # Normalize depth map
+    depth_map_normalized = cv2.normalize(depth_map, None, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
+
+    # Apply depth map as shading to RGB image
+    shaded_rgb = rgb_image * depth_map_normalized[..., np.newaxis]
+
+    return shaded_rgb
+
+
+def test_depth_to_rgb(rgb_image_path, depth_map_path):
+    # Load your RGB image and depth map
+    rgb_image = cv2.imread(rgb_image_path, cv2.COLOR_BGR2RGB)  # Replace with your image path
+    #rgb_image = Image.open(rgb_image_path).convert("RGB")
+    depth_map = cv2.imread(depth_map_path, cv2.IMREAD_GRAYSCALE)  # Replace with your depth map path
+
+    # Enhance the depth map
+    #depth_map = augment_image(depth_map, pipeline=enhacement_augmentation_pipeline)
+
+    #rgb_image_np = np.array(rgb_image)
+
+    # Resize depth map to match the size of the RGB image
+    depth_map = cv2.resize(depth_map, (rgb_image.shape[1], rgb_image.shape[0]))
+
+    # Apply the depth map to the RGB image
+    shaded_rgb_image = apply_depth_to_rgb(rgb_image, depth_map)
+
+    # Save or display the result
+    #cv2.imwrite('shaded_rgb_image.jpg', shaded_rgb_image)  # Save the shaded image
+
+    # Dispay results
+    display_images([rgb_image, depth_map, shaded_rgb_image], 
+                   titles=["RGB", "Depth", "Shaded RGB"], 
+                   num_cols=3, img_size=(100, 100), cmap='color')
+
+    fig, axes = plt.subplots(1, 3, figsize=(10, 3))
+
+    # Show original image
+    # axes[0].imshow(rgb_image)
+    # axes[0].set_title('Original Image')
+    # axes[0].axis('off')
+
+    # # Show estimated image
+    # axes[1].imshow(depth_map, cmap='gray')
+    # axes[1].set_title('Estimated Image')
+    # axes[1].axis('off')
+
+    # # Show restored image
+    # axes[2].imshow(shaded_rgb_image)
+    # axes[2].set_title('Restored Image')
+    # axes[2].axis('off')
+
+    # plt.tight_layout()
+    # plt.show()
+    
 ####################################################################################################
 # Main
 # - Load displacement maps
@@ -763,12 +912,15 @@ if __name__ == "__main__":
     config.read('config.ini')
 
     # Get the path to the test dataset directory
-    test_displacement_maps_path  = config['DEFAULT']['TEST_DATASET_PATH']
+    rgb_images      = config['DEFAULT']['RGB_TEST_DATASET_PATH']
+    ground_d_m_path = config['DEFAULT']['GROUND_TEST_DATASET_PATH']
+    est_d_m_path    = config['DEFAULT']['EST_TEST_DATASET_PATH']
+    dh_d_m_path    = config['DEFAULT']['DH_TEST_DATASET_PATH']
 
     # Test displacement maps generation
-    validation = test_displacement_maps_generation(test_displacement_maps_path)
+    #load_pairs_of_est_ground(ground_d_m_path, est_d_m_path)
 
-    if not validation:
-        raise Exception("Prevalidation failed.")
+    # test depth to rgb
+    test_depth_to_rgb(rgb_images + 'KAI_214_L10-11_2.png', dh_d_m_path + 'KAI_214_L10-11_2.png')
 
     print("Prevalidation successful.")
