@@ -27,7 +27,7 @@ batch_size              = None
 # 'DEFAULT' paths section
 # - Constants for data generation
 ####################################################################################################
-def init_default_paths(project_dir='./', dataset_size='medium'):
+def init_default_paths(project_dir='./', dataset_size='small'):
     global project_path, displacement_maps_path, x_training_dataset_path, y_training_dataset_path
     global paths, num_pairs, batch_size
 
@@ -92,24 +92,22 @@ def generate_pair_for_image(image, type='enhancement'):
     if image is None:
         raise ValueError("Input image is None")
 
-    pair_image = None
+    # Select degradation level
+    level = ip.degradation_level_selector()
 
-    if type == 'degradation':
-        # Select degradation level
-        level = ip.degradation_level_selector()
+    # Apply degradations based on the selected level
+    input_image = ip.apply_degradation_based_on_level(image.copy(), level)
 
-        # Apply degradations based on the selected level
-        pair_image = ip.apply_degradation_based_on_level(image.copy(), level)
-    elif type == 'enhancement':
-        # Sharpen the image and add it to the list
-        pair_image = ip.sharp_imgage(image.copy())
+    # Sharpen the image and add it to the list
+    target_image = ip.sharp_imgage(image.copy())
 
     # Ensure that a valid image is returned
-    if pair_image is None:
+    if input_image is None or target_image is None:
         raise ValueError("Function returned None")
 
     # Return the pair of images
-    return image, pair_image
+    return input_image, target_image
+
 
 ####################################################################################################
 # Generate synthetic displacement maps
@@ -245,9 +243,6 @@ def load_displacement_maps_from_directory(path):
     for i, displacement_map in enumerate(ground_displacement_maps):
         # Add the original displacement map
         x_displacement_maps.append(displacement_map)
-
-        # Sharpen the image and add it to the list
-        #x_displacement_maps.append(ip.sharp_imgage(displacement_map.copy()))
     
     print(f'Number of Synthetic Displacement Maps: {len(x_displacement_maps)}')
 

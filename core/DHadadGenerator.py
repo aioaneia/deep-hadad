@@ -105,7 +105,7 @@ class DHadadGenerator(Module):
         self.self_attention_1024 = SelfAttention(filter_sizes[7]) # 1024
 
         # Initialize Multi-Head Attention
-        self.multi_head_attention = MultiHeadAttention(in_channels=512, num_heads=8, dropout=dropout_prob)
+        #self.multi_head_attention = MultiHeadAttention(in_channels=512, num_heads=8, dropout=dropout_prob)
 
     # Initialize encoder
     def initialize_encoder(self, in_channels, filter_sizes, num_residual_blocks):

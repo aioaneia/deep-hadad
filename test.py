@@ -23,7 +23,7 @@ est_dataset_path = PROJECT_PATH + "data/test_dataset/Estimation"
 IMAGE_EXTENSIONS      = [".png", ".jpg", ".tif"]
 
 MODEL_PATH   = PROJECT_PATH + 'models/'
-MODEL_NAME   = 'dh_depth_model_ep_3_r1.00_p0.80_a0.50_g1.50_d1.20_s1.00.pth'
+MODEL_NAME   = 'dh_depth_model_ep_10_r1.00_p0.80_a0.60_g1.50_d1.20_s1.00.pth'
 
 transform = Compose([
   Resize((512, 512)),

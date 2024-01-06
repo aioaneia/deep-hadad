@@ -62,57 +62,71 @@ class DHadadLossWeights:
         Adjustments: If the images are too smooth or lacking in detail, reduce eta (TV Loss).
     """
 
-    
 
-    loss_weights = {
-        'recon':       1.0,  # L1 Reconstruction Loss
-        'perceptual':  0.8,  # SSIM Perceptual Loss
-        'adversarial': 0.5,  # Adversarial Loss
-        'geometric':   1.5,  # Geometric Consistency Loss
-        'depth':       1.2,  # Depth Consistency Loss
-        'sharp':       1.0   # Sharpness Loss
+    # loss_weights = {
+    #     'recon':       1.0,  # L1 Reconstruction Loss
+    #     'perceptual':  1.1,  # SSIM Perceptual Loss
+    #     'adversarial': 0.6,  # Adversarial Loss
+    #     'geometric':   1.5,  # Geometric Consistency Loss
+    #     'depth':       1.2,  # Depth Consistency Loss
+    #     'sharp':       1.0   # Sharpness Loss
+    # }
+
+    loss_weights_initial = {
+        'recon':       1.0,  # High for basic structure
+        'perceptual':  0.6,  # Moderate for initial textural accuracy
+        'adversarial': 0.2,  # Lower, focusing less on realism initially
+        'geometric':   1.2,  # Important for depth map accuracy
+        'depth':       1.0,  # Crucial for 3D representation
+        'sharp':       0.5   # Moderate for detail clarity
     }
 
-    loss_weights_stage_2 = {
-        'recon':       1.0,  # L1 Reconstruction Loss
-        'perceptual':  0.8,  # SSIM Perceptual Loss
-        'adversarial': 0.5,  # Adversarial Loss
-        'geometric':   1.5,  # Geometric Consistency Loss
-        'depth':       1.2,  # Depth Consistency Loss
-        'sharp':       1.0   # Sharpness Loss
+    loss_weights_mid = {
+        'recon':       0.9,
+        'perceptual':  0.8,
+        'adversarial': 0.3,
+        'geometric':   1.3,
+        'depth':       1.2,
+        'sharp':       0.7
     }
 
-    loss_weights_stage_3 = {
-        #'stru':       0.10, # Weight for MSE Loss
-        'recon':       0.15, # Weight for Reconstruction Loss (L1)
-        'perceptual':  0.35, # Weight for SSIM in Perceptual Loss
-        'adversarial': 0.05, # Weight for Adversarial Loss
-        'depth':       0.15, # Weight for Depth Consistency Loss
-        'geometric':   0.05, # Weight for Geometric Consistency Loss
-        'sharp':       0.15  # Weight for SharpnessLoss
+    loss_weights_advanced = {
+        'recon':       0.8,
+        'perceptual':  1.0,
+        'adversarial': 0.4,
+        'geometric':   1.3,
+        'depth':       1.1,
+        'sharp':       0.8
     }
 
-    loss_weights_stage_4 = {
-        #'stru':        0.10, # Weight for MSE Loss
-        'recon':       0.15, # Weight for Reconstruction Loss (L1)
-        'perceptual':  0.30, # Weight for SSIM in Perceptual Loss
-        'adversarial': 0.10, # Weight for Adversarial Loss
-        'depth':       0.15, # Weight for Depth Consistency Loss
-        'geometric':   0.05, # Weight for Geometric Consistency Loss
-        'sharp':       0.15  # Weight for SharpnessLoss
+    loss_weights_final = {
+        'recon':       0.8,
+        'perceptual':  1.0,
+        'adversarial': 0.5,
+        'geometric':   1.2,
+        'depth':       1.0,
+        'sharp':       0.9
+    }
+
+    loss_weights_final_2 = {
+        'recon':       0.7,
+        'perceptual':  1.0,
+        'adversarial': 0.6,
+        'geometric':   1.2,
+        'depth':       1.0,
+        'sharp':       0.9
     }
 
     METRIC_KEY_MAP = {
-        'psnr': ['beta'], # PSNR reflects overall reconstruction quality, influenced by MSE (alpha) and L1 (beta)
-        'ssim': ['gamma', 'eta'],  # SSIM captures perceptual quality, influenced by SSIM in Perceptual Loss (gamma) and Sharpness (eta)
-        'esi':  ['epsilon'] # ESI (Edge Similarity Index) impacts Geometric Consistency (zeta) and Depth Consistency (epsilon)
+        'psnr': ['recon'], # PSNR reflects overall reconstruction quality, influenced by L1 Reconstruction Loss
+        'ssim': ['perceptual', 'sharp'],  # SSIM captures perceptual quality, influenced by SSIM in Perceptual Loss and Sharpness Loss
+        'esi':  ['geometric', 'depth'] # ESI (Edge Similarity Index) impacts Geometric Consistency and Depth Consistency Loss
     }
-    
 
     
     def __init__(self, weights_type='depth', max_weight=0.5, min_weight=0.05, decay_factor=0.95, max_change=0.05):
         if weights_type == 'depth':
-            self.weights = self.loss_weights
+            self.weights = self.loss_weights_initial
         else:
             raise ValueError(f"Invalid weights type: {weights_type}")
         
@@ -190,13 +204,19 @@ class DHadadLossWeights:
         return string
 
     def manage_epoch_weights(self, epoch):
-        if epoch == 10:
-            self.weights = self.loss_weights_stage_2
-        elif epoch == 15:
-            self.weights = self.loss_weights_stage_3
-        elif epoch == 20:
-            self.weights = self.loss_weights_stage_4
-        elif epoch == 25:
-            self.weights = self.loss_weights
-        elif epoch == 30:
-            self.weights = self.loss_weights
+        """
+        Adjusts weights based on the epoch and model performance.
+        :param epoch: Current training epoch.
+        :param performance_metrics: Dictionary with performance metrics.
+        """
+        if epoch <= 20:
+            self.weights = self.loss_weights_initial
+        elif 20 < epoch <= 40:
+            self.weights = self.loss_weights_mid
+        elif 40 < epoch <= 60:
+            self.weights = self.loss_weights_advanced
+        elif 60 < epoch <= 80:
+            self.weights = self.loss_weights_final
+
+        # Log the changes for analysis
+        print(f"Epoch {epoch}: Updated weights to {self.weights}")

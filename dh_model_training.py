@@ -4,10 +4,8 @@ import sys
 import numpy as np
 import logging
 import glob
-
+import shutil
 import torch
-import torch.nn            as nn
-import torch.nn.functional as F
 
 from torch.nn.utils           import clip_grad_norm_
 from torch.utils.data         import DataLoader
@@ -47,7 +45,7 @@ else:
 
 # Check if MPS (Multi-Process Service) is available
 if torch.backends.mps.is_available():
-    mps_device = torch.device("mps")
+    device = torch.device("mps")
 
     print("MPS device found.")
 else:
@@ -59,11 +57,12 @@ print("PyTorch version: " + torch.__version__)
 # Set hyperparameter values for training 
 generator_lr        = 2e-5
 discriminator_lr    = 3e-5
-batch_size          = 32
+batch_size          = 1
 num_epochs          = 100
 checkpoint_interval = 10
 max_grad_norm       = 1.0
 patience            = 50
+improvement_threshold = 0.004  # 1% improvement
 lambda_gp           = 10    # The gradient penalty coefficient
 weights_type        = 'depth' # 'alpha', 'gamma', 'zeta' 
 
@@ -73,14 +72,12 @@ TRAINING_DATASET_PATH   = PROJECT_PATH + 'data/small_training_dataset'
 X_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/X'
 Y_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/Y'
 MODEL_PATH              = PROJECT_PATH + 'models/'
+MODEL_WEIGHTS_PATH      = MODEL_PATH + 'dh_depth_model_ep_2_r1.00_p1.10_a0.60_g1.50_d1.20_s1.00.pth'
 
 IMAGE_EXTENSIONS        = [".png", ".jpg", ".tif"]
 
 # Number of critic updates per generator update
 critic_updates_per_gen_update = 2
-
-# Update loss weights based on performance
-improvement_threshold = 0.005  # 1% improvement
 
 # Dynamic Loss Weights for adjusting the loss weights during training
 loss_weights  = DHadadLossWeights(weights_type=weights_type)
@@ -97,15 +94,36 @@ def get_image_paths(directory):
 
     return sorted(image_paths)
 
+def clear_local_directory(path):
+    if os.path.exists(path):
+      shutil.rmtree(path)
+    
+    os.makedirs(path)
+
+
+# def clean():
+#     """
+#     Clean the local directory
+#     """
+#     # Clear the existing data in the local directory and create a fresh directory
+#     clear_local_directory(project_local_path)
+
+#     # Copy data to local storage for faster access
+#     # Make sure to append the trailing slash to ensure contents are copied into the directory
+#     shutil.copytree(os.path.join(project_drive_path), project_local_path)
+
+#     # Set the project path to the local directory
+#     project_path = os.path.join(project_local_path, 'DeepHadadProject')
+
 
 def calculate_mean_and_std(real_image_paths, synthetic_image_paths, common_transforms):
     # Calculate mean and std for the dataset
     mean = 0.
-    std = 0.
+    std  = 0.
 
      # Use a subset to calculate mean and std for efficiency
-    subset_intact_image_paths  = real_image_paths      # real_image_paths[:100]
-    subset_damaged_image_paths = synthetic_image_paths # synthetic_image_paths[:100]
+    subset_intact_image_paths  = real_image_paths[:100]
+    subset_damaged_image_paths = synthetic_image_paths[:100]
     min_val, max_val           = float('inf'), -float('inf')
 
     for file_path in subset_damaged_image_paths:
@@ -218,6 +236,29 @@ def instantiate_networks():
     discriminator = DHadadDiscriminator(disc_in_channels).to(device)
 
     return generator, discriminator
+
+
+def load_model_weights(model, model_path):
+    """
+    Loads the model weights from the specified path
+    :param model: The model to load the weights into
+    :param model_path: The path to the model weights if available
+    :return: The model with the loaded weights
+    """
+    # Check if the model weights exist
+    if not os.path.exists(model_path):
+        print(f"Model weights not found at {model_path}. Training from scratch.")
+        return model
+    else:
+        print(f"Loading model weights from {model_path}")
+
+    # Load the model weights
+    checkpoint = torch.load(model_path, map_location=device)
+
+    # Load the model state dictionary
+    model.load_state_dict(checkpoint)
+
+    return model
 
 
 ########################################################################################
@@ -381,9 +422,9 @@ def calculate_performance_metrics(epoch, best_psnr, psnrs, best_ssim, ssims, bes
     avg_combined_score = dh_metrics.combined_score(avg_psnr, avg_ssim, avg_esi)
 
     # Check if the average PSNR for this epoch is higher than the best seen so far
-    is_psnr_improved = avg_psnr > best_psnr * (1 + improvement_threshold)
-    is_ssim_improved = avg_ssim > best_ssim * (1 + improvement_threshold)
-    is_esi_improved  = avg_esi  > best_esi  * (1 + improvement_threshold)
+    is_psnr_improved = avg_psnr >= best_psnr * (1 + improvement_threshold)
+    is_ssim_improved = avg_ssim >= best_ssim * (1 + improvement_threshold)
+    is_esi_improved  = avg_esi  >= best_esi  * (1 + improvement_threshold)
 
     # Performance metrics
     performance_metrics = {
@@ -487,8 +528,8 @@ def network_training(train_dataloader, val_dataloader, generator, discriminator,
             epochs_no_improve += 1
 
         #Update loss weights when there's no improvement
-        if save_checkpoint==False and epochs_no_improve > 2:
-            loss_weights.update_weights(performance_metrics, epoch, num_epochs)
+        # if save_checkpoint==False and epochs_no_improve > 2:
+        #     loss_weights.update_weights(performance_metrics, epoch, num_epochs)
 
         #Update loss weights at the end of each epoch
         loss_weights.manage_epoch_weights(epoch + 1)
@@ -527,6 +568,9 @@ if __name__ == "__main__":
 
     # Instantiate the generator and discriminator
     generator, discriminator = instantiate_networks()
+
+    # Load the model weights if available
+    generator = load_model_weights(generator, MODEL_WEIGHTS_PATH)
 
     # Initialize optimizers
     gen_optim, dis_optim = init_optimizer(generator, discriminator)

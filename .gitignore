@@ -36,6 +36,7 @@ Thumbs.db
 /data/medium_training_dataset/*
 /data/large_training_dataset/*
 /data/test_dataset/*
+/data/reconstruction_dataset/*
 
 /data/Inscriptions/*
 /data/inscriptions_dataset/*

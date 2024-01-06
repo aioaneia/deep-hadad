@@ -191,7 +191,7 @@ if __name__ == "__main__":
     validate_directories(paths)
 
     # Load the displacement images
-    inscriptions_images = load_inscriptions_images_from_directory(inscriptions_dataset_path, dir_regex=r'Karatepe Ort 1')
+    inscriptions_images = load_inscriptions_images_from_directory(inscriptions_dataset_path, dir_regex=r'ToOrg')
 
     # Extracting only the image data from each tuple
     images_only = [img for _, img in inscriptions_images]
@@ -200,7 +200,7 @@ if __name__ == "__main__":
     zoe = load_zoe()
 
     # Generate synthetic displacement maps
-    generate_depth_estimations(inscriptions_images, zoe, displacement_maps_path, invert=False) # False for Zoe_NK karatepe
+    generate_depth_estimations(inscriptions_images, zoe, displacement_maps_path, invert=True) # False for Zoe_NK karatepe
 
 
 ####################################################################################################

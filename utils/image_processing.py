@@ -16,16 +16,33 @@ import albumentations as A
 
 IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".tif'", ".tiff", ".bmp"]
 
-project_path = "./"
+# project_path = "./"
 
-# Read the config file
-config = configparser.ConfigParser()
-config.read(project_path + 'config.ini')
+# # Read the config file
+# config = configparser.ConfigParser()
+# config.read(project_path + 'config.ini')
 
-dataset_size='small'
+# dataset_size='small'
 
-x_training_dataset_path = project_path + config['DEFAULT'][f'{dataset_size.upper()}_X_TRAINING_DATASET_PATH']
-y_training_dataset_path = project_path + config['DEFAULT'][f'{dataset_size.upper()}_Y_TRAINING_DATASET_PATH']
+# x_training_dataset_path = project_path + config['DEFAULT'][f'{dataset_size.upper()}_X_TRAINING_DATASET_PATH']
+# y_training_dataset_path = project_path + config['DEFAULT'][f'{dataset_size.upper()}_Y_TRAINING_DATASET_PATH']
+
+# Define a pipeline of augmentation operations for enhancing displacement maps
+enhacement_augmentation_pipeline = A.Compose([
+    A.RandomBrightnessContrast(brightness_limit=(0.0, 0.0), contrast_limit = (-0.1, 0.1), always_apply=True),
+    A.Sharpen(alpha = (0.8, 1.0), lightness = (1.0, 1.0), always_apply=True),
+    A.Emboss(alpha = (0.9, 1.0), strength = (0.9, 1.0), always_apply = True)
+])
+
+# Define a pipeline of augmentation operations for damaging displacement maps
+damaging_augmentation_pipeline = A.Compose([
+    A.RandomBrightnessContrast(brightness_limit=(0.0, 0.0), contrast_limit = (-0.1, 0.1), always_apply=True),
+    A.GaussNoise(var_limit=(10, 50), p=0.5),
+    A.RandomGamma(gamma_limit=(50, 150), p=0.5),
+    A.Sharpen(alpha = (0.5, 0.8), lightness = (1.0, 1.0), always_apply=True),
+    A.ElasticTransform(alpha=1, sigma=50, alpha_affine=50, p=0.5),
+    A.CoarseDropout(max_holes=8, max_height=8, max_width=8, min_holes=2, fill_value=0, p=0.5),
+])
 
 ####################################################################################################
 # Function to get image from paths
@@ -346,7 +363,7 @@ def simulate_weathering_effects(image):
 ####################################################################################################
 # Simulate bumps and scratches
 ####################################################################################################
-def simulate_bumps_and_scratches(image, intensity=0.5, scratches=True):
+def simulate_bumps_and_scratches(image, intensity=0.5, scratches=True, bumps=False):
     # Create a copy of the image to work on
     simulated_image = image.copy()
 
@@ -354,21 +371,25 @@ def simulate_bumps_and_scratches(image, intensity=0.5, scratches=True):
     num_bumps     = int(6 * intensity)
     num_scratches = int(6 * intensity)
 
-    # Adding bumps
-    for _ in range(num_bumps):
-        x, y = np.random.randint(0, image.shape[1]), np.random.randint(0, image.shape[0])
-        radius = np.random.randint(1, 6)
-        bump_mask = np.zeros_like(image)
-        cv2.circle(bump_mask, (x, y), radius, (255), -1)
-        bump_blurred = cv2.GaussianBlur(bump_mask, (0, 0), radius / 2)
-        simulated_image = cv2.addWeighted(simulated_image, 1, bump_blurred, intensity, 0)
+    if bumps == True:
+        # Adding bumps
+        for _ in range(num_bumps):
+            x, y      = np.random.randint(0, image.shape[1]), np.random.randint(0, image.shape[0])
+            radius    = np.random.randint(1, 6)
+            bump_mask = np.zeros_like(image)
 
-    if scratches:
+            cv2.circle(bump_mask, (x, y), radius, (0), -1)
+
+            bump_blurred    = cv2.GaussianBlur(bump_mask, (0, 0), radius / 2)
+            simulated_image = cv2.addWeighted(simulated_image, 1, bump_blurred, intensity, 0)
+
+    if scratches == True:
         # Adding scratches
         for _ in range(num_scratches):
             x_start, y_start = np.random.randint(0, image.shape[1]), np.random.randint(0, image.shape[0])
-            x_end, y_end = np.random.randint(0, image.shape[1]), np.random.randint(0, image.shape[0])
-            thickness = np.random.randint(1, 3)
+            x_end, y_end     = np.random.randint(0, image.shape[1]), np.random.randint(0, image.shape[0])
+            thickness        = np.random.randint(1, 3)
+
             cv2.line(simulated_image, (x_start, y_start), (x_end, y_end), (0), thickness)
 
     return simulated_image
@@ -521,12 +542,15 @@ def apply_imgaug_augmentations(image):
     return augmented_image
 
 
+def augment_image(image, pipeline=enhacement_augmentation_pipeline):
+    return pipeline(image=image)['image']
+
 ####################################################################################################
 # Randomly select a degradation level
 # More weight on lighter degradation levels
 # Levels: 1 (light), 2 (moderate), 3 (heavy)
 ####################################################################################################
-def degradation_level_selector(levels=[1, 2, 3], probabilities=[0.4, 0.3, 0.3]):
+def degradation_level_selector(levels=[1, 2, 3, 4], probabilities=[0.3, 0.3, 0.2, 0.2]):
     return np.random.choice(levels, p = probabilities)
 
 
@@ -552,26 +576,25 @@ def apply_degradation_based_on_level(image, level):
             (add_blur, {'kernel_size': 5, 'preserve_edges': False}), # Apply a general blur to the map
             (erode_image, {'kernel_size_range': (3, 8), 'intensity': 0.6, 'kernel_shape': cv2.MORPH_ELLIPSE, 'iterations_range': (2, 3)}),
             (dilate_image, {'kernel_size_range': (2, 5), 'intensity': 1.0, 'inscription_mask': None, 'iterations': 1}),
+            (simulate_cracks, {'num_cracks_range': (3, 6), 'max_length': 120, 'crack_types': ['branching', 'wide', 'hairline']}), # Heavier crack simulation
         ]
     elif level == 3:
         # Apply heavier degradations
         funcs = [
             #(add_noise, {'intensity': 0.4}),
-            (add_blur, {'kernel_size': 7, 'preserve_edges': False}), # Apply a general blur to the map
+            (add_blur, {'kernel_size': 5, 'preserve_edges': False}), # Apply a general blur to the map
             (erode_image, {'kernel_size_range': (3, 8), 'intensity': 0.8, 'kernel_shape': cv2.MORPH_ELLIPSE, 'iterations_range': (1, 3)}),
-            (dilate_image, {'kernel_size_range': (3, 6), 'intensity': 1.0, 'inscription_mask': None, 'iterations': 1}),
-            (stretch_image, {'x_factor_range': (0.6, 1.3), 'y_factor_range': (0.6, 1.3)}),
+            #(dilate_image, {'kernel_size_range': (3, 6), 'intensity': 1.0, 'inscription_mask': None, 'iterations': 1}),
+            #(stretch_image, {'x_factor_range': (0.6, 1.3), 'y_factor_range': (0.6, 1.3)}),
             #(skew_image, {'x_skew_range': (0.6, 1.3), 'y_skew_range': (0.6, 1.3)}),
-            (simulate_discoloration_and_texture, {'discoloration_intensity': 0.2, 'texture_intensity': 0.2}),
-            #(simulate_cracks, {'num_cracks_range': (3, 5), 'max_length': 100, 'crack_types': ['branching', 'wide']}), # Heavier crack simulation
-            #(simulate_text_fading, {'num_areas_range': (1, 4), 'area_size_range': (10, 40), 'fading_intensity_range': (0.1, 0.6)}),
-            #(simulate_bumps_and_scratches, {'intensity': 0.8, 'scratches': False}) # Heavier bump and scratch simulation
-
+            #(simulate_discoloration_and_texture, {'discoloration_intensity': 0.2, 'texture_intensity': 0.2}),
+            (simulate_cracks, {'num_cracks_range': (3, 6), 'max_length': 120, 'crack_types': ['branching', 'wide']}), # Heavier crack simulation
+            (simulate_text_fading, {'num_areas_range': (1, 4), 'area_size_range': (10, 40), 'fading_intensity_range': (0.1, 0.3)}),
+            (simulate_bumps_and_scratches, {'intensity': 0.7, 'scratches': True}) # Heavier bump and scratch simulation
         ]
     elif level == 4: 
-        # For testing purposes
         funcs = [
-            (skew_image, {'x_skew_range': (0.6, 1.3), 'y_skew_range': (0.6, 1.3)}),
+            (augment_image, {'pipeline': damaging_augmentation_pipeline})
         ]
     else:
         raise ValueError(f"Invalid degradation level: {level}")
@@ -581,7 +604,7 @@ def apply_degradation_based_on_level(image, level):
         image = func(image, **params)
     
     # Apply imgaug augmentations to emphasize features relevant to text and structural integrity
-    image = apply_imgaug_augmentations(image)
+    #image = apply_imgaug_augmentations(image)
 
     return image
 
@@ -707,26 +730,6 @@ def validate_intensity_distribution(real_images, synthetic_images):
         print("No significant difference in distributions.")
         return True
 
-# Define a pipeline of augmentation operations for enhancing displacement maps
-enhacement_augmentation_pipeline = A.Compose([
-    A.RandomBrightnessContrast(brightness_limit=(0.0, 0.0), contrast_limit = (-0.1, 0.1), always_apply=True),
-    A.Sharpen(alpha = (0.8, 1.0), lightness = (1.0, 1.0), always_apply=True),
-    A.Emboss(alpha = (0.9, 1.0), strength = (0.9, 1.0), always_apply = True)
-])
-
-# Define a pipeline of augmentation operations for damaging displacement maps
-damaging_augmentation_pipeline = A.Compose([
-    A.RandomBrightnessContrast(brightness_limit=(0.0, 0.0), contrast_limit = (-0.1, 0.1), always_apply=True),
-    A.GaussNoise(var_limit=(10, 50), p=0.5),
-    A.RandomGamma(gamma_limit=(50, 150), p=0.5),
-    A.Sharpen(alpha = (0.5, 0.8), lightness = (1.0, 1.0), always_apply=True),
-    A.ElasticTransform(alpha=1, sigma=50, alpha_affine=50, p=0.5),
-    A.CoarseDropout(max_holes=8, max_height=8, max_width=8, min_holes=2, fill_value=0, p=0.5),
-])
-
-def augment_image(image, pipeline=enhacement_augmentation_pipeline):
-    return pipeline(image=image)['image']
-
 
 ####################################################################################################
 # Save save_paired_image
@@ -741,35 +744,35 @@ def save_paired_image(input_image, target_image, x_path, y_path, batch_index, pa
     cv2.imwrite(os.path.join(y_path, filename_y), target_image)
 
 
-def load_pairs_of_est_ground(input_displacement_maps_path, target_displacement_maps_path):
-    input_displacement_maps   = []
-    target_displacement_maps      = []
+# def load_pairs_of_est_ground(input_displacement_maps_path, target_displacement_maps_path):
+#     input_displacement_maps   = []
+#     target_displacement_maps      = []
 
-    # Load ground displacement maps
-    input_displacement_maps  += load_displacement_maps(input_displacement_maps_path)
-    target_displacement_maps += load_displacement_maps(target_displacement_maps_path)
+#     # Load ground displacement maps
+#     input_displacement_maps  += load_displacement_maps(input_displacement_maps_path)
+#     target_displacement_maps += load_displacement_maps(target_displacement_maps_path)
 
-    # Display ground images
-    display_images(input_displacement_maps, first_n=5)
+#     # Display ground images
+#     display_images(input_displacement_maps, first_n=5)
 
-    # Generate synthetic enhanced displacement maps from ground displacement maps
-    for i, displacement_map in enumerate(target_displacement_maps):
-        # Sharpen the estimated displacement map
-        target_d_map = augment_image(target_displacement_maps[i], pipeline=enhacement_augmentation_pipeline)
+#     # Generate synthetic enhanced displacement maps from ground displacement maps
+#     for i, displacement_map in enumerate(target_displacement_maps):
+#         # Sharpen the estimated displacement map
+#         target_d_map = augment_image(target_displacement_maps[i], pipeline=enhacement_augmentation_pipeline)
 
-        for j in range(10):
-            #enhanced_displacement_map_v1 = sharp_imgage(est_displacement_map)
-            input_d_map = augment_image(input_displacement_maps[i], pipeline=damaging_augmentation_pipeline)
+#         for j in range(10):
+#             #enhanced_displacement_map_v1 = sharp_imgage(est_displacement_map)
+#             input_d_map = augment_image(input_displacement_maps[i], pipeline=damaging_augmentation_pipeline)
 
-            # Display images
-            #display_images([enhanced_est_d_map, ground_d_map], first_n=5, titles=["Estimated", "Ground"], num_cols=3)
+#             # Display images
+#             #display_images([enhanced_est_d_map, ground_d_map], first_n=5, titles=["Estimated", "Ground"], num_cols=3)
 
-            save_paired_image(
-                input_d_map, 
-                target_d_map, 
-                x_training_dataset_path, 
-                y_training_dataset_path, 
-                i, j)
+#             save_paired_image(
+#                 input_d_map, 
+#                 target_d_map, 
+#                 x_training_dataset_path, 
+#                 y_training_dataset_path, 
+#                 i, j)
 
 ####################################################################################################
 # Test displacement maps from directory

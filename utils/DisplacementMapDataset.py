@@ -17,6 +17,7 @@ class DisplacementMapDataset(Dataset):
         self.target_image_paths = target_image_paths
         self.transform          = transform
         self.counter            = 0 
+        self.count_skipped      = 0
 
     def filter_invalid_images(self, image_paths):
         """
@@ -48,6 +49,22 @@ class DisplacementMapDataset(Dataset):
                 input_image  = cv2.imread(input_image_path,  cv2.IMREAD_GRAYSCALE)
                 target_image = cv2.imread(target_image_path, cv2.IMREAD_GRAYSCALE)
 
+                # Check if the images were loaded successfully
+                if input_image is None or target_image is None:
+                    print(f"Error opening image files:       {input_image_path}, {target_image_path}")
+                    print(f"Skipping image pair:             {input_image_path}, {target_image_path}")
+                    print(f"Number of image pairs processed: {self.counter}")
+                    print(f"Number of image pairs remaining: {len(self.input_image_paths) - self.counter}")
+                    print(f"Number of image pairs skipped:   {self.count_skipped}")
+
+                    # Increment the index and try the next pair of images
+                    idx = (idx + 1) % len(self.input_image_paths)
+
+                    # Increment the number of skipped images
+                    self.count_skipped += 1
+
+                    continue
+
                 # Convert the NumPy array to a PIL Image 
                 input_image  = Image.fromarray(input_image)
                 target_image = Image.fromarray(target_image)
@@ -60,7 +77,7 @@ class DisplacementMapDataset(Dataset):
                 self.counter += 1
 
                 # Log every 3000 pairs of images processed the current pair of images
-                if self.counter % 3000 == 0:
+                if self.counter % 100 == 0:
                     print(f"Processed {self.counter} pairs. Current pair: {input_image_path}, {target_image_path}")
                 
                 return input_image, target_image
@@ -68,3 +85,6 @@ class DisplacementMapDataset(Dataset):
                 print(f"Error opening image files: {input_image_path}, {target_image_path}. Error: {e}")
                 # Increment the index and try the next pair of images
                 idx = (idx + 1) % len(self.input_image_paths)
+
+                # Increment the number of skipped images
+                self.count_skipped += 1
