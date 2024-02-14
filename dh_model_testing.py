@@ -16,7 +16,7 @@ from torchvision import datasets
 
 # import the networks
 from core.DHadadGenerator     import DHadadGenerator
-from core.DHadadDiscriminator import DHadadDiscriminator
+from bkp.PatchGAN            import DHadadDiscriminator
 
 # Constants
 PROJECT_PATH          = './'
@@ -26,7 +26,7 @@ original_dataset_path = PROJECT_PATH + "data/test_dataset/Org"
 IMAGE_EXTENSIONS      = [".png", ".jpg", ".tif"]
 
 MODEL_PATH   = PROJECT_PATH + 'models/'
-MODEL_NAME   = 'dh_delta_model_ep_19_a0.05_b0.10_g0.35_d0.25_e0.05_z0.15_e0.05.pth'
+MODEL_NAME   = 'dh_depth_model_ep_1_r1.00_p0.60_a0.20_g1.20_d1.00_s0.50.pth'
 
 transform = Compose([
   Resize((512, 512)),

@@ -27,7 +27,7 @@ batch_size              = None
 # 'DEFAULT' paths section
 # - Constants for data generation
 ####################################################################################################
-def init_default_paths(project_dir='./', dataset_size='small'):
+def init_default_paths(project_dir='./', dataset_size='medium'):
     global project_path, displacement_maps_path, x_training_dataset_path, y_training_dataset_path
     global paths, num_pairs, batch_size
 
@@ -124,8 +124,10 @@ def generate_synthetic_maps(displacement_maps, num_pairs=10):
 
             # Save real-enhanced pair
             save_paired_image(
-                x_depth_image, y_depth_image, 
-                x_training_dataset_path, y_training_dataset_path, 
+                x_depth_image, 
+                y_depth_image, 
+                x_training_dataset_path, 
+                y_training_dataset_path, 
                 i, j
             )
 

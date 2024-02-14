@@ -5,8 +5,10 @@ from PIL import Image
 
 import cv2
 
+import time
+
 class DisplacementMapDataset(Dataset):
-    def __init__(self, input_image_paths, target_image_paths, transform=None):
+    def __init__(self, input_image_paths, target_image_paths, transform=None, preload_images=True):
         """
         Args:
             input_image_paths  (list): List of paths for the input images
@@ -16,38 +18,45 @@ class DisplacementMapDataset(Dataset):
         self.input_image_paths  = input_image_paths
         self.target_image_paths = target_image_paths
         self.transform          = transform
-        self.counter            = 0 
-        self.count_skipped      = 0
+        self.preload_images     = preload_images
 
-    def filter_invalid_images(self, image_paths):
-        """
-        Filters out invalid images from the list of image paths
-        :param image_paths: The list of image paths
-        :return: The list of valid image paths
-        """
-        valid_image_paths = []
+        self.counter       = 0
+        self.count_skipped = 0
+        self.start_time    = time.time()
 
-        for image_path in image_paths:
-            try:
-                Image.open(image_path)
-                valid_image_paths.append(image_path)
-            except IOError:
-                print(f"Error opening image file: {image_path}")
+        if preload_images:
+            self.input_images  = [self.load_image(path) for path in input_image_paths]
+            self.target_images = [self.load_image(path) for path in target_image_paths]
+        else:
+            self.input_images  = None
+            self.target_images = None
+
+    def load_image(self, path):
+        """
+        Loads an image from the file path and returns it as a PIL Image
+        :param path: The path to the image file
+        :return: The image as a PIL Image
+        """
         
-        return valid_image_paths
-  
+        image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+
+        return Image.fromarray(image) if image is not None else None
+        
     def __len__(self):
         return len(self.input_image_paths)
 
     def __getitem__(self, idx):
         while True:
             try:
-                input_image_path   = self.input_image_paths[idx]
+                input_image_path  = self.input_image_paths[idx]
                 target_image_path = self.target_image_paths[idx]
 
-                # Load the input and target images as grayscale images represented as NumPy arrays
-                input_image  = cv2.imread(input_image_path,  cv2.IMREAD_GRAYSCALE)
-                target_image = cv2.imread(target_image_path, cv2.IMREAD_GRAYSCALE)
+                if self.preload_images:
+                    input_image  = self.input_images[idx]
+                    target_image = self.target_images[idx]
+                else:
+                    input_image  = self.load_image(input_image_path)
+                    target_image = self.load_image(target_image_path)
 
                 # Check if the images were loaded successfully
                 if input_image is None or target_image is None:
@@ -65,21 +74,23 @@ class DisplacementMapDataset(Dataset):
 
                     continue
 
-                # Convert the NumPy array to a PIL Image 
-                input_image  = Image.fromarray(input_image)
-                target_image = Image.fromarray(target_image)
-
                 if self.transform:
-                    input_image   = self.transform(input_image)
+                    input_image  = self.transform(input_image)
                     target_image = self.transform(target_image)
 
                 # Increment the counter and log every 100 pairs
                 self.counter += 1
 
-                # Log every 3000 pairs of images processed the current pair of images
-                if self.counter % 100 == 0:
-                    print(f"Processed {self.counter} pairs. Current pair: {input_image_path}, {target_image_path}")
-                
+                # Log every 500 pairs of images processed the current pair of images and the total number of pairs processed so far and the time elapsed
+                if self.counter % 1000 == 0:
+                    print(f"Processed image pair: {input_image_path}, {target_image_path}")
+                    print(f"Number of image pairs processed: {self.counter}")
+                    print(f"Number of image pairs skipped:   {self.count_skipped}")
+
+                    # Calculate the time per image pair and log it with two decimal places
+                    time_per_image_pair = (time.time() - self.start_time) / self.counter
+                    print(f"Time per image pair:             {time_per_image_pair:.2f} seconds")
+
                 return input_image, target_image
             except IOError as e:
                 print(f"Error opening image files: {input_image_path}, {target_image_path}. Error: {e}")

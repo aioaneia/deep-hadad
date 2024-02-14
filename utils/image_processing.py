@@ -14,7 +14,7 @@ from PIL         import Image
 
 import albumentations as A
 
-IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".tif'", ".tiff", ".bmp"]
+IMAGE_EXTENSIONS = [".png", ".jpg", "JPG", ".jpeg", ".tif'", ".tiff", ".bmp"]
 
 # project_path = "./"
 
@@ -27,21 +27,17 @@ IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".tif'", ".tiff", ".bmp"]
 # x_training_dataset_path = project_path + config['DEFAULT'][f'{dataset_size.upper()}_X_TRAINING_DATASET_PATH']
 # y_training_dataset_path = project_path + config['DEFAULT'][f'{dataset_size.upper()}_Y_TRAINING_DATASET_PATH']
 
-# Define a pipeline of augmentation operations for enhancing displacement maps
-enhacement_augmentation_pipeline = A.Compose([
-    A.RandomBrightnessContrast(brightness_limit=(0.0, 0.0), contrast_limit = (-0.1, 0.1), always_apply=True),
-    A.Sharpen(alpha = (0.8, 1.0), lightness = (1.0, 1.0), always_apply=True),
-    A.Emboss(alpha = (0.9, 1.0), strength = (0.9, 1.0), always_apply = True)
-])
 
-# Define a pipeline of augmentation operations for damaging displacement maps
 damaging_augmentation_pipeline = A.Compose([
-    A.RandomBrightnessContrast(brightness_limit=(0.0, 0.0), contrast_limit = (-0.1, 0.1), always_apply=True),
-    A.GaussNoise(var_limit=(10, 50), p=0.5),
-    A.RandomGamma(gamma_limit=(50, 150), p=0.5),
-    A.Sharpen(alpha = (0.5, 0.8), lightness = (1.0, 1.0), always_apply=True),
-    A.ElasticTransform(alpha=1, sigma=50, alpha_affine=50, p=0.5),
-    A.CoarseDropout(max_holes=8, max_height=8, max_width=8, min_holes=2, fill_value=0, p=0.5),
+    A.RandomBrightnessContrast(brightness_limit=(-0.2, 0.2), contrast_limit=(-0.2, 0.2), p=0.7),
+    A.GaussNoise(var_limit=(20, 60), p=0.6),
+    A.RandomGamma(gamma_limit=(80, 120), p=0.6),
+    A.ElasticTransform(alpha=2, sigma=50, alpha_affine=40, p=0.5),
+    A.CoarseDropout(max_holes=10, max_height=20, max_width=20, min_holes=3, fill_value=0, p=0.6),
+    A.GaussianBlur(blur_limit=(3, 7), p=0.5),
+    A.Rotate(limit=15, p=0.5),
+    # Replace 'desired_height' and 'desired_width' with actual values
+    A.RandomCrop(height=512, width=512, p=0.5),
 ])
 
 ####################################################################################################
@@ -458,91 +454,44 @@ def resize_with_aspect_ratio(image, target_size=(512, 512), background_value=0):
 
     return new_image
 
+def apply_sobel(image):
+    #gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=5)
+    sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5)
 
-####################################################################################################
+    sobel = np.hypot(sobelx, sobely)
+
+    return (sobel / np.max(sobel) * 255).astype(np.uint8)
+
 # Sharpen image
-####################################################################################################
 def sharp_imgage(image):
-    # Define a sequence of augmentations
-    seq = iaa.Sequential([
-        # Beneficial for enhancing contrast in images
-        #iaa.AllChannelsHistogramEqualization(),
+    """
+    Sharpen the image using the unsharp mask method.
+    """
+    
+    # Create a sharpening kernel
+    transform = A.Compose([
+        # Contrast Limited Adaptive Histogram Equalization
+        A.CLAHE(clip_limit=(2.0, 3.0), p=1),
 
-        # Improve contrast
-        iaa.ContrastNormalization(1.1), 
-        
-        # Adjusting brightness and contrast nonlinearly
-        iaa.GammaContrast(0.9), # 1.5
+        # Gamma Contrast
+        A.RandomGamma(gamma_limit=(90, 110), p=1),
 
-        # Emphasizing edges the in displacement map, 
-        iaa.Sharpen(alpha=1, lightness=(1.1)),
+        # Sharpen the image
+        A.Sharpen(alpha=(0.9, 1), lightness=(1.0, 1.0), p=1),
 
-        # Enhance texture 
-        iaa.Emboss(alpha=(0.4, 0.7), strength=1.0),
+        # Emboss effect to enhance texture
+        A.Emboss(alpha=(0.4, 0.6), strength=(0.9, 1), p=1),
     ])
 
-    # Apply augmentations
-    augmented_image = seq(image=image)
+    # Enhance the depth map
+    augmented_image = transform(image=image)['image']
 
     return augmented_image
 
 
-####################################################################################################
-# Apply imgaug augmentations to an image
-# 
-# Reference: https://imgaug.readthedocs.io/en/latest/index.html
-####################################################################################################
-def apply_imgaug_augmentations(image):
-    # Define a sequence of augmentations
-    seq = iaa.Sequential([
-        # Apply two to four of the following augmentations
-        iaa.SomeOf((2, 4), [
-            # Apply affine transformations to simulate real-world variations in 
-            # orientation and perspective
-            iaa.Affine(
-                scale={"x": (0.98, 1.02), "y": (0.98, 1.02)},
-                translate_percent={"x": (-0.02, 0.02), "y": (-0.02, 0.02)},
-                rotate=(-5, 5),
-                shear=(-2, 2)
-            ),
-            
-            # Beneficial for enhancing contrast in images
-            iaa.AllChannelsHistogramEqualization(),
-
-            # Improve contrast
-            iaa.ContrastNormalization((0.75, 1.5)), 
-
-            # Adjusting brightness and contrast nonlinearly
-            iaa.GammaContrast((0.5, 1.5)),
-
-            # Adjusting brightness and contrast nonlinearly
-            iaa.SigmoidContrast(gain=(5, 10), cutoff=(0.4, 0.6)),
-
-            # Emphasizing edges and textures in displacement maps, 
-            # aiding in the enhancement of eroded or faded inscriptions.
-            iaa.Sharpen(alpha=(0.4, 1.0), lightness=(0.75, 1)),
-
-            # Enhance texture
-            iaa.Emboss(alpha=(0.4, 1.0), strength=(0.5, 2.0)),
-
-            # Local distortions
-            iaa.PiecewiseAffine(scale=(0.01, 0.05))
-
-            # Can be beneficial to simulate different viewing angles
-            #iaa.PerspectiveTransform(scale=(0.01, 0.15))
-
-            # Simulate missing parts
-            #iaa.CoarseDropout((0.02, 0.1), size_percent=(0.02, 0.25))
-        ], random_order=True)
-    ])
-
-    # Apply augmentations
-    augmented_image = seq(image=image)
-
-    return augmented_image
-
-
-def augment_image(image, pipeline=enhacement_augmentation_pipeline):
+def augment_image(image, pipeline=None):
     return pipeline(image=image)['image']
 
 ####################################################################################################
@@ -550,7 +499,7 @@ def augment_image(image, pipeline=enhacement_augmentation_pipeline):
 # More weight on lighter degradation levels
 # Levels: 1 (light), 2 (moderate), 3 (heavy)
 ####################################################################################################
-def degradation_level_selector(levels=[1, 2, 3, 4], probabilities=[0.3, 0.3, 0.2, 0.2]):
+def degradation_level_selector(levels=[1, 2, 3], probabilities=[0.5, 0.3, 0.2]):
     return np.random.choice(levels, p = probabilities)
 
 
@@ -567,7 +516,7 @@ def apply_degradation_based_on_level(image, level):
         funcs = [
             #(add_noise, {'intensity': 0.5}),
             (add_blur, {'kernel_size': 3, 'preserve_edges': True}), # Apply a general blur to the map
-            (erode_image, {'kernel_size_range': (2, 8), 'intensity': 0.5, 'kernel_shape': cv2.MORPH_ELLIPSE, 'iterations_range': (1, 3)}),
+            (erode_image, {'kernel_size_range': (2, 10), 'intensity': 0.5, 'kernel_shape': cv2.MORPH_ELLIPSE, 'iterations_range': (2, 3)}),
         ]
     elif level == 2:
         # Apply moderate degradations
@@ -576,7 +525,7 @@ def apply_degradation_based_on_level(image, level):
             (add_blur, {'kernel_size': 5, 'preserve_edges': False}), # Apply a general blur to the map
             (erode_image, {'kernel_size_range': (3, 8), 'intensity': 0.6, 'kernel_shape': cv2.MORPH_ELLIPSE, 'iterations_range': (2, 3)}),
             (dilate_image, {'kernel_size_range': (2, 5), 'intensity': 1.0, 'inscription_mask': None, 'iterations': 1}),
-            (simulate_cracks, {'num_cracks_range': (3, 6), 'max_length': 120, 'crack_types': ['branching', 'wide', 'hairline']}), # Heavier crack simulation
+            (simulate_cracks, {'num_cracks_range': (3, 8), 'max_length': 160, 'crack_types': ['branching', 'wide', 'hairline']}), # Heavier crack simulation
         ]
     elif level == 3:
         # Apply heavier degradations
@@ -588,9 +537,9 @@ def apply_degradation_based_on_level(image, level):
             #(stretch_image, {'x_factor_range': (0.6, 1.3), 'y_factor_range': (0.6, 1.3)}),
             #(skew_image, {'x_skew_range': (0.6, 1.3), 'y_skew_range': (0.6, 1.3)}),
             #(simulate_discoloration_and_texture, {'discoloration_intensity': 0.2, 'texture_intensity': 0.2}),
-            (simulate_cracks, {'num_cracks_range': (3, 6), 'max_length': 120, 'crack_types': ['branching', 'wide']}), # Heavier crack simulation
+            (simulate_cracks, {'num_cracks_range': (3, 8), 'max_length': 180, 'crack_types': ['branching', 'wide']}), # Heavier crack simulation
             (simulate_text_fading, {'num_areas_range': (1, 4), 'area_size_range': (10, 40), 'fading_intensity_range': (0.1, 0.3)}),
-            (simulate_bumps_and_scratches, {'intensity': 0.7, 'scratches': True}) # Heavier bump and scratch simulation
+            (simulate_bumps_and_scratches, {'intensity': 0.8, 'scratches': True}) # Heavier bump and scratch simulation
         ]
     elif level == 4: 
         funcs = [
@@ -604,7 +553,7 @@ def apply_degradation_based_on_level(image, level):
         image = func(image, **params)
     
     # Apply imgaug augmentations to emphasize features relevant to text and structural integrity
-    #image = apply_imgaug_augmentations(image)
+    image = augment_image(image, damaging_augmentation_pipeline)
 
     return image
 
@@ -645,7 +594,7 @@ def load_inscriptions_images(path, target_size=(512, 512)):
         raise ValueError(f"{path} is not a valid directory")
     
     inscriptions_images = []
-    images_paths         = glob.glob(os.path.join(path, '*.png')) + glob.glob(os.path.join(path, '*.jpg'))
+    images_paths         = glob.glob(os.path.join(path, '*.png')) + glob.glob(os.path.join(path, '*.jpg')) + glob.glob(os.path.join(path, '*.JPG'))
 
     for image_path in tqdm(images_paths, desc="Loading inscriptions images"):
         try:

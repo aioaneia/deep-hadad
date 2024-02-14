@@ -3,44 +3,103 @@ import torch
 import torch.nn            as nn
 import torch.nn.functional as F
 
-from loss.WeightedSSIMLoss         import WeightedSSIMLoss
-from loss.DepthConsistencyLoss     import DepthConsistencyLoss
-from loss.GeometricConsistencyLoss import GeometricConsistencyLoss
-from loss.SharpnessLoss            import SharpnessLoss
+from pytorch_msssim import SSIM
+from torchvision    import transforms
+
+import torchvision.models as models
+
+class EdgeLoss(nn.Module):
+    def __init__(self):
+        super(EdgeLoss, self).__init__()
+        # Define Sobel filter for horizontal and vertical edge detection
+        self.sobel_x = nn.Conv2d(1, 1, kernel_size=3, padding=1, bias=False)
+        self.sobel_y = nn.Conv2d(1, 1, kernel_size=3, padding=1, bias=False)
+
+        # Sobel filter weights for x and y direction
+        sobel_x_weights = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]], dtype=torch.float32).view(1, 1, 3, 3)
+        sobel_y_weights = torch.tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]], dtype=torch.float32).view(1, 1, 3, 3)
+
+        self.sobel_x.weight = nn.Parameter(sobel_x_weights, requires_grad=False)
+        self.sobel_y.weight = nn.Parameter(sobel_y_weights, requires_grad=False)
+
+    def forward(self, input, target):
+        # Ensure input and target are in correct format
+        if input.dim() != 4 or target.dim() != 4:
+            raise ValueError("Expected input and target to be 4-dimensional BxCxHxW")
+
+        # Apply Sobel filter to input and target images
+        edge_input_x = self.sobel_x(input)
+        edge_input_y = self.sobel_y(input)
+        edge_target_x = self.sobel_x(target)
+        edge_target_y = self.sobel_y(target)
+
+        # Calculate edge magnitude for input and target
+        edge_input_mag = torch.sqrt(edge_input_x ** 2 + edge_input_y ** 2)
+        edge_target_mag = torch.sqrt(edge_target_x ** 2 + edge_target_y ** 2)
+
+        # Calculate loss as Mean Squared Error between edge magnitudes of input and target
+        loss = F.mse_loss(edge_input_mag, edge_target_mag)
+
+        return loss
+
+class GeometricConsistencyLoss(nn.Module):
+    """
+        Maintains geometric integrity of depth information.
+        This will help in preserving the contours and shapes of letters in the displacement maps.
+    """
+
+    def __init__(self):
+        super(GeometricConsistencyLoss, self).__init__()
+
+    def forward(self, predicted_map, target_map):
+        grad_x_pred, grad_y_pred     = self.compute_gradients(predicted_map)
+        grad_x_target, grad_y_target = self.compute_gradients(target_map)
+
+        # Calculate the loss as the mean squared error between the gradients of the predicted and target maps
+        loss_x = F.mse_loss(grad_x_pred, grad_x_target)
+        loss_y = F.mse_loss(grad_y_pred, grad_y_target)
+
+        # Combine the losses
+        loss = loss_x + loss_y
+
+        return loss
+
+    def compute_gradients(self, map):
+        # Function to compute gradients in the x and y direction
+        grad_x = map[:, :, :, :-1] - map[:, :, :, 1:]
+        grad_y = map[:, :, :-1, :] - map[:, :, 1:, :]
+
+        return grad_x, grad_y
+
+
+class SharpnessLoss(nn.Module):
+    """
+        SharpnessLoss 
+    """
+    def __init__(self):
+        super(SharpnessLoss, self).__init__()
+
+        self.kernel = torch.tensor([[-1, -1, -1],
+                                    [-1,  9, -1],
+                                    [-1, -1, -1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+
+    def forward(self, input, target):
+        self.kernel  = self.kernel.to(input.device)
+        sharp_input  = F.conv2d(input, self.kernel, padding=1)
+        sharp_target = F.conv2d(target, self.kernel, padding=1)
+        
+        return F.mse_loss(sharp_input, sharp_target)
+
 
 class DHadadLossFunctions:
     """
     Contains the loss functions used in the DHadad model
     """
-
-    @staticmethod
-    def mean_sq_error_loss(input, target):
-        """
-        Calculates the mean squared error loss for a batch of images
-        
-        Pros:
-            It ensures the overall structure of the reconstructed image
-            is similar to the intact image.
-        Cons:
-            MSE could encourage blurred details, which can be detrimental 
-            for text recovery and for sharp engravings.
-
-        :param input: The input images
-        :param target: The target images
-        :return: The mean squared error loss for the batch
-        """
-        return nn.MSELoss()(input, target)
     
     @staticmethod
     def l1_loss(input, target):
         """
         Calculates the L1 loss for a batch of images
-        
-        Pros:
-            It helps in recovering finer details without overly penalizing slight deviations that 
-            aren't perceptually significant.
-        Cons:
-            It can be detrimental for sharp engravings.
 
         :param input: The input images
         :param target: The target images
@@ -48,79 +107,52 @@ class DHadadLossFunctions:
         """
         return nn.L1Loss()(input, target)
 
+
     @staticmethod
-    def ssim_loss(input, target):
+    def ssim_loss(input, target, data_range=1, size_average=True, channel=1):
         """
         Calculates the SSIM loss for a batch of images
-        
-        Pros:
-            It captures textural and stylistic features.
-            it captures the perceptual similarity between the images.
-            luminance, and contrast in an image.
-            It's a better alternative to MSE and L1 losses.
-        Cons:
-            It can be detrimental for sharp engravings.
 
         :param input: The input images
         :param target: The target images
         :return: The SSIM loss for the batch
         """
-        weighted_ssim_loss = WeightedSSIMLoss(data_range = 1, size_average = True, channel = 1, weight = 1.0)
-        
-        return weighted_ssim_loss(input, target)
 
-    @staticmethod
-    def dce_with_logits_loss(input, target):
-        """
-        Calculates the binary cross entropy with logits loss for a batch of images
-        TO encourage the generator to create images that are indistinguishable
-        from the intact displacement maps.
-        Encourages realism in the generated maps.
+        ssim      = SSIM(data_range = data_range, size_average=size_average, channel=channel)
+        ssim_loss = ssim(input, target)
+        ssim_loss = 1 - ssim_loss
 
-        Pros:
-            It's a good loss function for binary classification problems.
-        Cons:
-            It can be detrimental for sharp engravings.
-
-        :param input: The input images
-        :param target: The target images
-        :return: The binary cross entropy with logits loss for the batch
-        """
-        return nn.BCEWithLogitsLoss()(input, target)
+        return ssim_loss
     
-    @staticmethod
-    def depth_consistency_loss(input, target):
-        """
-        Calculates the depth consistency loss for a batch of images
-        
-        This is a robust loss that combines the benefits of L1 and L2 losses.
-        It can be particularly useful if there's a lot of noise in the damaged maps.
-        Depth data is uncertain in some places
-        This loss can help in smoothing the depth map without losing essential details.
 
-        Pros:
-            It's a good loss function for binary classification problems.
-        Cons:
-            It can be detrimental for sharp engravings.
+    @staticmethod
+    def adversarial_loss(predictions, labels):
+        """
+            Calculates adversarial loss for the generator and discriminator using the binary cross entropy with logits loss function 
+            and the predictions and the labels.
+        """
+
+        return F.binary_cross_entropy_with_logits(predictions, labels)
+    
+
+    @staticmethod
+    def depth_consistency_loss(input, target, epsilon=1e-6):
+        """
+        # Charbonnier Loss: sqrt((x - y)^2 + epsilon)
 
         :param input: The input images
         :param target: The target images
         :return: The depth consistency loss for the batch
         """
-        return DepthConsistencyLoss()(input, target)
+
+        loss = torch.mean(torch.sqrt((input - target) ** 2 + epsilon))
+
+        return loss
 
     @staticmethod
     def geometric_consistency_loss(input, target):
         """
         Calculates the geometric consistency loss for a batch of images
-        
-        Maintains geometric integrity of depth information.
-        This will help in preserving the contours and shapes of letters in the displacement maps.
-
-        Pros:
-            It's a good loss function for binary classification problems.
-        Cons:
-            It can be detrimental for sharp engravings.
 
         :param input: The input images
         :param target: The target images
@@ -134,23 +166,18 @@ class DHadadLossFunctions:
         Calculates the sharpness loss for a batch of images
         
         Encourages spatial smoothness in the generated images.
-        This can help in reducing noise and artifacts in the generated images.
-
-        Pros:
-            It's a good loss function for binary classification problems.
-        Cons:
-            It can be detrimental for sharp engravings.
+        This can help in reducing noise and artifacts in the generated images.s.
 
         :param input: The input images
         :param target: The target images
         :return: The sharpness loss for the batch
         """
         return SharpnessLoss()(input, target)
-
+    
     @staticmethod
-    def tv_loss(img):
+    def edge_loss(input, target):
         """
-        Calculates the total variation loss for a batch of images
+        Calculates the edge loss for a batch of images
         
         Encourages spatial smoothness in the generated images.
         This can help in reducing noise and artifacts in the generated images.
@@ -162,184 +189,62 @@ class DHadadLossFunctions:
 
         :param input: The input images
         :param target: The target images
-        :return: The total variation loss for the batch
+        :return: The edge loss for the batch
         """
-
-        batch_size, _, height, width = img.size()
-        
-        tv_h = torch.pow(img[:, :, 1:, :] - img[:, :, :-1, :], 2).sum()
-        tv_w = torch.pow(img[:, :, :, 1:] - img[:, :, :, :-1], 2).sum()
-
-        return (tv_h + tv_w) / (batch_size * height * width)
-
-
-    @staticmethod
-    def adversarial_loss(discriminator_preds, is_real=True):
-        """
-        Calculates adversarial loss for the discriminator or generator output.
-        Encourages the generator to create images that are indistinguishable
-        from the intact displacement maps.
-
-        Pros:
-            It's a good loss function for binary classification problems.
-        Cons:
-            It can be detrimental for sharp engravings.
-        
-        :param discriminator_preds: Predictions from the discriminator
-        :param is_real: Flag indicating whether the target is real or fake
-        :return: Adversarial loss value
-        """
-
-        # Dynamically determine the device from the input tensors
-        device = discriminator_preds.device
-
-        # Create labels based on whether is_real is True or False
-        labels = torch.ones_like(discriminator_preds, device=device) if is_real \
-            else torch.zeros_like(discriminator_preds, device=device)
-
-        # Calculate Binary Cross Entropy with Logits Loss
-        return nn.BCEWithLogitsLoss()(discriminator_preds, labels)
+        return EdgeLoss()(input, target)
 
 
     def __init__(self):
         pass
 
-    def calculate_gen_loss(self, fake_imgs, real_imgs, discriminator_preds, loss_weights):
+
+    def compute_gradient_penalty(self,discriminator, damaged_dm, fake_samples, real_samples, lambda_gp=10.0):
         """
-        Calculates the combined generator loss
+        Calculate the gradient penalty loss, used in WGAN-GP paper https://arxiv.org/abs/1704.00028
+        The gradient penalty enforces the Lipschitz constraint for the critic (discriminator).
         """
-        # Mean Squared Error Loss
-        #mse_loss = self.mean_sq_error_loss(fake_imgs, real_imgs)
+        batch_size = real_samples.size(0)
 
-        # Reconstruction Loss (L1)
-        recon_loss = self.l1_loss(fake_imgs, real_imgs)
+        # Generate random epsilon for the interpolation
+        epsilon = torch.rand(batch_size, 1, 1, 1, device=real_samples.device)
+        epsilon = epsilon.expand_as(real_samples)
 
-        # Perceptual Loss
-        ssim_loss = self.ssim_loss(fake_imgs, real_imgs)
+        # Interpolate between real and fake samples
+        interpolates = epsilon * real_samples + (1 - epsilon) * fake_samples
+        interpolates = interpolates.requires_grad_(True)
 
-        # Adversarial Loss for the generator
-        adv_loss = self.adversarial_loss(discriminator_preds, is_real=False)
+        # Concatenate the damaged_dm with the interpolates along the channel dimension
+        # Make sure damaged_dm is expanded to the same batch size as interpolates if necessary
+        interpolated_input = torch.cat([damaged_dm.expand_as(interpolates), interpolates], dim=1)
 
-        # Charbonnier Loss (robust L1/L2 loss)
-        depth_loss = self.depth_consistency_loss(fake_imgs, real_imgs)
+        # Pass the interpolated input through the discriminator
+        d_interpolates = discriminator(interpolated_input)
 
-        # predicted_map and target_map are your generated and ground truth displacement maps, respectively
-        geom_loss = self.geometric_consistency_loss(fake_imgs, real_imgs)
+        # Create a tensor of ones that is the same size as d_interpolates output,
+        # which will be used to compute gradients
+        ones = torch.ones_like(d_interpolates, requires_grad=False)
 
-        sharp_loss = self.sharpness_loss(fake_imgs, real_imgs)
-
-        # Check for NaNs in losses
-        if any(torch.isnan(loss).any() for loss in [recon_loss, ssim_loss, adv_loss, depth_loss, geom_loss, sharp_loss]):
-            print("NaNs detected in generator losses")
-
-        # Combine the losses
-        combined_loss = ( # torch.mean
-            loss_weights['recon']       * recon_loss + \
-            loss_weights['perceptual']  * ssim_loss + \
-            loss_weights['adversarial'] * adv_loss + \
-            loss_weights['depth']       * depth_loss + \
-            loss_weights['geometric']   * geom_loss + \
-            loss_weights['sharp']       * sharp_loss
-        )
-
-        return combined_loss
-    
-
-    ########################################################################################
-    # Define Evaluation Functions
-    # Gradient Penalty
-    # The gradient penalty is typically used in the context of Wasserstein GANs
-    # with Gradient Penalty (WGAN-GP).
-    # It enforces the Lipschitz constraint by penalizing the gradient norm
-    # of the discriminator's output with respect to its input.
-    ########################################################################################
-    def compute_gradient_penalty(self, discriminator, fake_samples, real_samples):
-        # Random weight term for interpolation between real and fake samples
-        alpha = torch.rand((real_samples.size(0), 1, 1, 1), device=real_samples.device)
-
-        # Get random interpolation between real and fake samples
-        interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
-        
-        # Logging shapes and checking for NaNs
-        #print("Interpolates Shape: ", interpolates.shape)
-
-        if torch.isnan(interpolates).any():
-            print("NaNs in interpolates")
-            #return torch.tensor(0.0).to(real_samples.device)  # Early return with a default value
-
-        d_interpolates = discriminator(interpolates)
-
-        if d_interpolates.grad_fn is None:
-            print("d_interpolates does not have a valid grad_fn")
-            #return torch.tensor(0.0).to(real_samples.device)
-
-        # Checking for NaNs after discriminator
-        if torch.isnan(d_interpolates).any():
-            print("NaNs in discriminator output")
-            #return torch.tensor(0.0).to(real_samples.device)  # Early return with a default value
-        
-        #fake = torch.ones(d_interpolates.size(), requires_grad=False, device=real_samples.device)
-        grad_outputs = torch.ones_like(d_interpolates)
-
-        # Get gradient w.r.t. interpolates
+        # Compute gradients of d_interpolates with respect to interpolates
         gradients = torch.autograd.grad(
-            outputs      = d_interpolates,
-            inputs       = interpolates,
-            grad_outputs = grad_outputs,
-            create_graph = True,
-            retain_graph = True,
-            only_inputs  = True
-            #allow_unused = True # This allows for the case where some inputs might not affect outputs
+            outputs=d_interpolates,
+            inputs=interpolates,
+            grad_outputs=ones,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True,
         )[0]
 
-        # Handling the case where gradients might be None
-        if gradients is None:
-            print("No gradients found for interpolates")
-            #return torch.tensor(0.0).to(real_samples.device)
-        
-        # Checking for NaNs in gradients
-        if torch.isnan(gradients).any():
-            print("NaNs in gradients")
-            #return torch.tensor(0.0).to(real_samples.device)  # Early return with a default value
+        # Reshape gradients to calculate norm per batch sample
+        # Gradients has shape (batch_size, num_channels, H, W)
+        # Flatten the gradients such that each row contains all the gradients for one sample
+        gradients = gradients.view(batch_size, -1)
 
-        gradients        = gradients.view(gradients.size(0), -1)
-        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+        # Calculate the norm of the gradients for each sample (2-norm across each row)
+        # Add a small epsilon for numerical stability
+        gradients_norm = torch.sqrt(torch.sum(gradients ** 2, dim=1) + 1e-12)
 
-        # Checking for NaNs in gradient penalty
-        if torch.isnan(gradient_penalty):
-            print("NaNs in gradient penalty")
-            #return torch.tensor(0.0).to(real_samples.device)  # Early return with a default value
+        # Calculate gradient penalty as the mean squared distance to 1 of the gradients' norms
+        gradient_penalty = ((gradients_norm - 1) ** 2).mean() * lambda_gp
 
         return gradient_penalty
 
-    
-    def calculate_dis_loss(self, discriminator, fake_imgs, real_imgs, lambda_gp):
-        """
-        Calculates the combined discriminator loss
-        """
-
-        # Classify fake image
-        # The enhanced_dm is the fake image here
-        output_fake = discriminator(fake_imgs)
-
-        # Classify the real image
-        # The synthetic_dm is the real image here
-        output_real = discriminator(real_imgs) 
-
-        # Adversarial Loss for the discriminator
-        real_loss = self.adversarial_loss(output_real, is_real=True)
-
-        # Adversarial Loss for the generator
-        fake_loss = self.adversarial_loss(output_fake, is_real=False)
-
-        # Gradient Penalty
-        gradient_penalty = self.compute_gradient_penalty(discriminator, fake_imgs, real_imgs) * lambda_gp
-
-        # Check for NaNs in losses
-        if any(torch.isnan(loss).any() for loss in [real_loss, fake_loss]):
-            print("NaNs detected in discriminator losses")
-
-        # Compute the total discriminator loss
-        combined_loss = (real_loss + fake_loss + lambda_gp * gradient_penalty) / 3
-
-        return combined_loss

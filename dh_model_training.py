@@ -4,13 +4,14 @@ import sys
 import numpy as np
 import logging
 import glob
-import shutil
 import torch
+import functools
 
+from torch import nn
 from torch.nn.utils           import clip_grad_norm_
 from torch.utils.data         import DataLoader
 from torch.optim              import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim              import lr_scheduler
 
 from torch.cuda.amp import GradScaler, autocast
 
@@ -24,10 +25,11 @@ from sklearn.model_selection import train_test_split
 sys.path.append('./')
 
 # Import the DeepHadad networks
-from core.DHadadGenerator     import DHadadGenerator
-from core.DHadadDiscriminator import DHadadDiscriminator
-from core.DHadadLossFunctions import DHadadLossFunctions
-from core.DHadadLossWeights   import DHadadLossWeights
+from core.DHadadGenerator       import DHadadGenerator
+from core.UnetGenerator         import UnetGenerator
+from core.PatchGANDiscriminator import build_discriminator as DHadadDiscriminator
+from core.DHadadLossFunctions   import DHadadLossFunctions
+from core.DHadadLossWeights     import DHadadLossWeights
 
 from utils.DisplacementMapDataset  import DisplacementMapDataset
 
@@ -55,16 +57,19 @@ else:
 print("PyTorch version: " + torch.__version__)
 
 # Set hyperparameter values for training 
-generator_lr        = 2e-5
-discriminator_lr    = 3e-5
-batch_size          = 1
+generator_lr        = 0.0002
+discriminator_lr    = 0.0003
+batch_size          = 2
 num_epochs          = 100
-checkpoint_interval = 10
+checkpoint_interval = 3
 max_grad_norm       = 1.0
-patience            = 50
+patience            = 100
 improvement_threshold = 0.004  # 1% improvement
 lambda_gp           = 10    # The gradient penalty coefficient
-weights_type        = 'depth' # 'alpha', 'gamma', 'zeta' 
+weights_type        = 'depth' #
+
+# Number of critic updates per generator update
+critic_updates_per_gen_update = 2
 
 # Set the project paths
 PROJECT_PATH            = './'
@@ -72,12 +77,11 @@ TRAINING_DATASET_PATH   = PROJECT_PATH + 'data/small_training_dataset'
 X_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/X'
 Y_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/Y'
 MODEL_PATH              = PROJECT_PATH + 'models/'
-MODEL_WEIGHTS_PATH      = MODEL_PATH + 'dh_depth_model_ep_2_r1.00_p1.10_a0.60_g1.50_d1.20_s1.00.pth'
+MODEL_WEIGHTS_PATH      = MODEL_PATH + 'dh_depth_model_ep_1_l100.00_s20.00_t5.00_a30.00.pth'
 
 IMAGE_EXTENSIONS        = [".png", ".jpg", ".tif"]
 
-# Number of critic updates per generator update
-critic_updates_per_gen_update = 2
+
 
 # Dynamic Loss Weights for adjusting the loss weights during training
 loss_weights  = DHadadLossWeights(weights_type=weights_type)
@@ -93,27 +97,6 @@ def get_image_paths(directory):
         image_paths.extend(glob.glob(os.path.join(directory, '*' + ext)))
 
     return sorted(image_paths)
-
-def clear_local_directory(path):
-    if os.path.exists(path):
-      shutil.rmtree(path)
-    
-    os.makedirs(path)
-
-
-# def clean():
-#     """
-#     Clean the local directory
-#     """
-#     # Clear the existing data in the local directory and create a fresh directory
-#     clear_local_directory(project_local_path)
-
-#     # Copy data to local storage for faster access
-#     # Make sure to append the trailing slash to ensure contents are copied into the directory
-#     shutil.copytree(os.path.join(project_drive_path), project_local_path)
-
-#     # Set the project path to the local directory
-#     project_path = os.path.join(project_local_path, 'DeepHadadProject')
 
 
 def calculate_mean_and_std(real_image_paths, synthetic_image_paths, common_transforms):
@@ -153,7 +136,7 @@ def calculate_mean_and_std(real_image_paths, synthetic_image_paths, common_trans
     return mean, std
 
 
-def load_dataset():
+def load_dataset(preload_images = False):
     """
     Loads the training dataset
     :return: The dataloaders for both training dataset and validation dataset
@@ -184,9 +167,7 @@ def load_dataset():
 
     # Data Augmentation for the Real Images
     image_transforms = transforms.Compose([
-        #transforms.RandomResizedCrop(512, scale=(0.8, 1.0)),
         transforms.RandomRotation(10), 
-        #transforms.RandomCrop(224),
         common_transforms,
         transforms.Normalize(mean=mean.tolist(), std=std.tolist())
     ])
@@ -199,8 +180,8 @@ def load_dataset():
         intact_image_paths, damaged_image_paths, test_size = 0.2, shuffle=False, random_state = None)
 
     # Create training and validation datasets and dataloaders
-    train_dataset = DisplacementMapDataset(train_real, train_synthetic, transform = image_transforms)
-    val_dataset   = DisplacementMapDataset(val_real,   val_synthetic,   transform = image_transforms)
+    train_dataset = DisplacementMapDataset(train_real, train_synthetic, transform = image_transforms, preload_images = False)
+    val_dataset   = DisplacementMapDataset(val_real,   val_synthetic,   transform = image_transforms, preload_images = False)
 
     # Create dataset and dataloader
     # The dataloader will return a list of [real, synthetic] images for each batch of images
@@ -216,24 +197,91 @@ def load_dataset():
 
     return train_dataloader, val_dataloader
 
+def get_norm_layer(norm_type='instance'):
+    """Return a normalization layer
+
+    Parameters:
+        norm_type (str) -- the name of the normalization layer: batch | instance | none
+
+    For BatchNorm, we use learnable affine parameters and track running statistics (mean/stddev).
+    For InstanceNorm, we do not use learnable affine parameters. We do not track running statistics.
+    """
+
+    if norm_type == 'batch':
+        norm_layer = functools.partial(nn.BatchNorm2d, affine = True, track_running_stats=True)
+    elif norm_type == 'instance':
+        norm_layer = functools.partial(nn.InstanceNorm2d, affine = False, track_running_stats=False)
+    elif norm_type == 'group':
+        norm_layer = functools.partial(nn.GroupNorm, num_groups = 32, affine=True)
+    elif norm_type == 'layer':
+        norm_layer = functools.partial(nn.LayerNorm, normalized_shape = [512, 512])
+    else:
+        raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
+
+    return norm_layer
+
 
 ########################################################################################
 # Instantiate the generator and discriminator
+
 ########################################################################################
-def instantiate_networks():
+def instantiate_networks(type='unet_512', num_downs=7, ngf=128, norm_type='instance', use_dropout=False, use_se_block=False):
+    """
+    Instantiates the generator and discriminator
+    :param type: The type of network to instantiate (dh, unet, or resnet)
+    :return: The generator and discriminator
+    """
+
     # grayscale images, 3 for RGB images
     gen_in_channels  = 1
     # to generate grayscale restored images 
     gen_out_channels = 1 
 
-    # Instantiate the generator with the specified channel configurations
-    generator = DHadadGenerator(gen_in_channels, gen_out_channels).to(device)
+    norm_layer = get_norm_layer(norm_type = norm_type)
 
+    # Instantiate the generator with the specified channel configurations
+    if type == 'dh':
+        generator = DHadadGenerator(gen_in_channels, gen_out_channels).to(device)
+    elif type == 'unet_128':
+        generator = UnetGenerator(
+            gen_in_channels, gen_out_channels, 7, norm_layer = norm_layer, use_dropout = True
+        ).to(device)
+    elif type == 'unet_256':
+        generator = UnetGenerator(
+            gen_in_channels, 
+            gen_out_channels, 
+            num_downs   = 8,
+            ngf         = ngf, 
+            norm_layer  = norm_layer, 
+            use_dropout = use_dropout
+        ).to(device)
+    elif type == 'unet_512':
+        generator = UnetGenerator(
+            gen_in_channels,
+            gen_out_channels,
+            num_downs   = num_downs,
+            ngf         = ngf,
+            norm_layer  = norm_layer,
+            use_dropout = use_dropout
+        ).to(device)
+
+        generator.apply(generator.initialize_weights)
+    elif type == 'resnet':
+        pass
+    else:
+        print(f"Error: Unknown network type {type}")
+        return None
+    
     # Specify the input channel configurations (it typically takes two inputs)
     # we assume we're providing pairs of images (intact and restored) as input
     disc_in_channels = 1
 
-    discriminator = DHadadDiscriminator(disc_in_channels).to(device)
+    discriminator = DHadadDiscriminator(
+        disc_in_channels,
+        filter_sizes = [64, 128, 256, 512, 512, 512, 1024],
+        use_dropout  = use_dropout,
+        use_se_block = use_se_block
+        ).to(device)
 
     return generator, discriminator
 
@@ -267,42 +315,78 @@ def load_model_weights(model, model_path):
 ########################################################################################
 def init_optimizer(generator, discriminator):
     # Initialize optimizers
-    gen_optim = Adam(generator.parameters(),     lr=generator_lr,     betas=(0.5, 0.999))
-    dis_optim = Adam(discriminator.parameters(), lr=discriminator_lr, betas=(0.5, 0.999))
+    gen_optim = Adam(generator.parameters(),     lr = generator_lr,     betas = (0.5, 0.999), amsgrad=True)
+    dis_optim = Adam(discriminator.parameters(), lr = discriminator_lr, betas = (0.5, 0.999), amsgrad=True)
 
     return gen_optim, dis_optim
 
 
-def train_discriminator_step(discriminator, dis_optim, fake_dm, real_dm, lambda_gp, max_grad_norm):
-    """
-    Update Discriminator Step
-    """
-    # Log min, max, and NaN count of inputs
-    #print("Synthetic_dm Min:", synthetic_dm.min().item(), "Max:", synthetic_dm.max().item(), "NaNs:", torch.isnan(synthetic_dm).sum().item())
-    #print("Enhanced_dm Min:", enhanced_dm.min().item(), "Max:", enhanced_dm.max().item(), "NaNs:", torch.isnan(enhanced_dm).sum().item())
+def init_schedulers(gen_optim, dis_optim, opt = "plateau"):
+    """Return a learning rate scheduler
 
-    # Check for NaNs in inputs and skip the step if found
-    if torch.isnan(real_dm).any() or torch.isnan(fake_dm).any():
-        print("Skipping step due to NaNs in input")
+    Parameters:
+        optimizer          -- the optimizer of the network
+        opt (option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions.
+                              opt.lr_policy is the name of learning rate policy: linear | step | plateau | cosine
+
+    For 'linear', we keep the same learning rate for the first <opt.n_epochs> epochs
+    and linearly decay the rate to zero over the next <opt.n_epochs_decay> epochs.
+    For other schedulers (step, plateau, and cosine), we use the default PyTorch schedulers.
+    See https://pytorch.org/docs/stable/optim.html for more details.
+    """
+
+    if opt == 'linear':
+        def lambda_rule(epoch):
+            lr_l = 1.0 - max(0, epoch + opt.epoch_count - opt.n_epochs) / float(opt.n_epochs_decay + 1)
+            return lr_l
+        gen_scheduler = lr_scheduler.LambdaLR(gen_optim, lr_lambda=lambda_rule)
+    elif opt == 'step':
+        gen_scheduler = lr_scheduler.StepLR(gen_optim, step_size=opt.lr_decay_iters, gamma=0.1)
+    elif opt == 'plateau':
+        gen_scheduler = lr_scheduler.ReduceLROnPlateau(gen_optim, mode='min', factor=0.2, threshold=0.01, patience=5)
+        dis_scheduler = lr_scheduler.ReduceLROnPlateau(dis_optim, mode='min', factor=0.2, threshold=0.01, patience=5)
+    elif opt == 'cosine':
+        gen_scheduler = lr_scheduler.CosineAnnealingLR(gen_optim, T_max=opt.n_epochs, eta_min=0)
+    else:
+        return NotImplementedError('learning rate policy [%s] is not implemented', opt.lr_policy)
+
+    return gen_scheduler, dis_scheduler
+
+
+def train_discriminator_step(discriminator, dis_optim, damaged_dm, enhanced_dm, fake_dm):
+    """
+        Update Discriminator Step
+    """
     
     for _ in range(critic_updates_per_gen_update):
         dis_optim.zero_grad()
 
-        # Detach the enhanced_dm from the generator
-        detached_fake_dm = fake_dm.detach()
+        # Classify the real image 
+        # Concatenate the inputs along the channel dimension
+        combined_damaged_enhanced = torch.cat([damaged_dm, enhanced_dm], dim=1)
+        output_real = discriminator(combined_damaged_enhanced)
+        real_labels = torch.ones_like(output_real, device=device)
 
-        # Compute discriminator loss
-        dis_loss = loss_functions.calculate_dis_loss(discriminator, detached_fake_dm, real_dm, lambda_gp)
+        # Classify fake image
+        combined_damaged_fake = torch.cat([damaged_dm, fake_dm], dim=1)
+        output_fake = discriminator(combined_damaged_fake)
+        fake_labels = torch.zeros_like(output_fake, device=device)
+
+        # Compute gradient penalty
+        gradient_penalty = loss_functions.compute_gradient_penalty(discriminator, damaged_dm, fake_dm, enhanced_dm) * lambda_gp
+
+        # Compute the total discriminator loss
+        real_loss = loss_functions.adversarial_loss(output_real, real_labels)
+        fake_loss = loss_functions.adversarial_loss(output_fake, fake_labels)
+        dis_loss = (real_loss + fake_loss) / 2 + lambda_gp * gradient_penalty
+
+       # print_gradients(discriminator, "Discriminator gradients before backward:")
 
         # Compute gradients
         dis_loss.backward()
-
-        # Validate gradients
-        for param in discriminator.parameters():
-            if param.grad is not None and torch.isnan(param.grad).any():
-                print("NaNs detected in discriminator gradients")
-                return dis_loss
         
+        #print_gradients(discriminator, "Discriminator gradients after backward:")
+
         # Clip gradients for discriminator
         clip_grad_norm_(discriminator.parameters(), max_norm=max_grad_norm)
         
@@ -312,24 +396,51 @@ def train_discriminator_step(discriminator, dis_optim, fake_dm, real_dm, lambda_
     return dis_loss
 
 
-def train_generator_step(generator, gen_optim, enhanced_dm, real_dm, output_fake_for_gen, loss_weights, max_grad_norm):
+def train_generator_step(generator, gen_optim, fake_dm, real_dm, fake_for_gen, misleading_labels):
     """
-    Update Generator Step
+        Update Generator Step 
     """
+
     gen_optim.zero_grad()
 
-    gen_loss = loss_functions.calculate_gen_loss(enhanced_dm, real_dm, output_fake_for_gen, loss_weights.weights)
+    l1_loss    = loss_functions.l1_loss(fake_dm, real_dm)
+    adv_loss   = loss_functions.adversarial_loss(fake_for_gen, misleading_labels)
+    ssim_loss  = loss_functions.ssim_loss(fake_dm, real_dm)
+    depth_loss = loss_functions.depth_consistency_loss(fake_dm, real_dm)
+    sharp_loss = loss_functions.sharpness_loss(fake_dm, real_dm)
+    geom_loss  = loss_functions.geometric_consistency_loss(fake_dm, real_dm)
+    
+    gen_loss = (
+        loss_weights.weights['l1']          * l1_loss    + \
+        loss_weights.weights['adversarial'] * adv_loss   + \
+        loss_weights.weights['ssim']        * ssim_loss  + \
+        loss_weights.weights['depth']       * depth_loss + \
+        loss_weights.weights['geometric']   * geom_loss  + \
+        loss_weights.weights['sharp']       * sharp_loss
+    )
+
+    # Check if gen_loss is None
+    if gen_loss is None:
+        raise ValueError("Generator loss (gen_loss) is None. Check the loss calculation.")
+
+    # Check if gen_loss is a scalar
+    if not torch.is_tensor(gen_loss) or gen_loss.dim() != 0:
+        raise ValueError("Generator loss (gen_loss) is not a scalar. It must be a 0-dimensional tensor.")
 
     # Backprop
+    #print_gradients(generator, "Generator gradients before backward:")
+
     gen_loss.backward()
     
+    #print_gradients(generator, "Generator gradients after backward:")
+
     # Clip gradients for generator
     clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
 
     # Optimize
     gen_optim.step()
 
-    return gen_loss
+    return gen_loss, [l1_loss, adv_loss, ssim_loss, depth_loss, sharp_loss, geom_loss]
 
     
 def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader):
@@ -339,27 +450,36 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader)
     real_dms are the ground truth and estimated displacement maps
     synthetic_dms are the procedurally enhanced displacement maps
     """
+
     generator.train()
     discriminator.train()
 
-    for i, (real_dm, synthetic_dm) in enumerate(train_dataloader):
+    for i, (damaged_dm, enhanced_dm) in enumerate(train_dataloader):
         # Move images to GPU
-        real_dm      = real_dm.to(device)
-        synthetic_dm = synthetic_dm.to(device)
+        damaged_dm  = damaged_dm.to(device)
+        enhanced_dm = enhanced_dm.to(device)
 
-        # Generate the enhanced image from the real image
-        enhanced_dm = generator(real_dm)
+        # Generate fake data for discriminator training and detach it
+        fake_dm  = generator(damaged_dm).detach()
+        dis_loss = train_discriminator_step(discriminator, dis_optim, damaged_dm, enhanced_dm, fake_dm)
 
-        # train the discriminator first
-        dis_loss = train_discriminator_step(discriminator, dis_optim, enhanced_dm, synthetic_dm, lambda_gp, max_grad_norm)
+        # Generate fake data for generator training (do not detach)
+        fake_dm_for_gen = generator(damaged_dm)
 
-        # Classify real and fake images again after training the discriminator
-        output_fake_for_gen = discriminator(enhanced_dm)
+        # # Freeze discriminator's parameters
+        for param in discriminator.parameters():
+            param.requires_grad = False
+        
+        combined_damaged_fake     = torch.cat([damaged_dm, fake_dm], dim=1)
+        fake_for_gen              = discriminator(combined_damaged_fake)
+        misleading_labels         = torch.ones_like(fake_for_gen, device=device)
+        gen_loss, loss_components = train_generator_step(generator, gen_optim, fake_dm_for_gen, enhanced_dm, fake_for_gen, misleading_labels)
+        
+        # Unfreeze discriminator's parameters after generator training
+        for param in discriminator.parameters():
+            param.requires_grad = True
 
-        # train the generator next
-        gen_loss = train_generator_step(generator, gen_optim, enhanced_dm, real_dm, output_fake_for_gen, loss_weights, max_grad_norm)
-
-    return gen_loss, dis_loss
+    return gen_loss, loss_components, dis_loss
 
 def validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis, max_grad_norm):
     """
@@ -371,7 +491,7 @@ def validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis
 
     with torch.no_grad():
         # Clip val gradients
-        clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
+        #clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
 
         for real_dm, synthetic_dm in val_dataloader:
             real_dm      = real_dm.to(device)
@@ -398,7 +518,7 @@ def validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis
 
 
 def calculate_performance_metrics(epoch, best_psnr, psnrs, best_ssim, ssims, best_esi, esis, 
-                                  epoch_time, gen_loss, dis_loss, gen_optim, dis_optim):
+                                  epoch_time, gen_loss, loss_components, dis_loss, gen_optim, dis_optim):
     """
     Calculate the performance metrics for the current epoch
     """
@@ -439,7 +559,7 @@ def calculate_performance_metrics(epoch, best_psnr, psnrs, best_ssim, ssims, bes
                             avg_ssim, min_ssim, max_ssim, std_ssim,
                             avg_esi, min_esi, max_esi, std_esi,
                             avg_combined_score, performance_metrics,                          
-                            gen_loss, dis_loss, gen_optim, dis_optim)
+                            gen_loss, loss_components, dis_loss, gen_optim, dis_optim)
 
     return performance_metrics, avg_combined_score
 
@@ -454,13 +574,26 @@ def save_model(generator, epoch, loss_weights):
 
     torch.save(generator.state_dict(), os.path.join(MODEL_PATH, MODEL_NAME))
 
+
+# Function to print the gradients of the first layer of the model
+def print_gradients(model, message):
+    print(message)
+
+    # Assuming the first layer of the model is a Conv2d layer. Adjust if your model differs.
+    first_layer = list(model.modules())[1]
+
+    for name, param in first_layer.named_parameters():
+        if param.requires_grad:
+            # param.grad can be None if the gradient has not been computed yet
+            print(f"Layer: {name}, Gradient: {param.grad if param.grad is not None else 'No gradient computed yet'}")
+
+
 ########################################################################################
 # Training Loop
 ########################################################################################
 def network_training(train_dataloader, val_dataloader, generator, discriminator, gen_optim, dis_optim):
     #Learning Rate Scheduling
-    gen_scheduler = ReduceLROnPlateau(gen_optim, mode='min', factor=0.1, patience=5)
-    dis_scheduler = ReduceLROnPlateau(dis_optim, mode='min', factor=0.1, patience=5)
+    gen_scheduler, dis_scheduler = init_schedulers(gen_optim, dis_optim, opt = "plateau")
 
     # Initialize some variables for averaging
     best_psnr  = -float('inf')
@@ -483,7 +616,7 @@ def network_training(train_dataloader, val_dataloader, generator, discriminator,
         start_time = time.time()
 
         # Training step
-        gen_loss, dis_loss = train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader)
+        gen_loss, loss_components, dis_loss  = train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader)
 
         # Validation step
         validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis, max_grad_norm)
@@ -497,7 +630,7 @@ def network_training(train_dataloader, val_dataloader, generator, discriminator,
         # Calculate performance metrics for this epoch
         performance_metrics, avg_combined_score = calculate_performance_metrics(
             (epoch + 1), best_psnr, psnrs, best_ssim, ssims, best_esi, esis, 
-            epoch_time, gen_loss, dis_loss, gen_optim, dis_optim)
+            epoch_time, gen_loss.item(), loss_components, dis_loss.item(), gen_optim, dis_optim)
 
         # Save model checkpoints at regular intervals and best models
         save_checkpoint = False
@@ -527,10 +660,6 @@ def network_training(train_dataloader, val_dataloader, generator, discriminator,
         else:
             epochs_no_improve += 1
 
-        #Update loss weights when there's no improvement
-        # if save_checkpoint==False and epochs_no_improve > 2:
-        #     loss_weights.update_weights(performance_metrics, epoch, num_epochs)
-
         #Update loss weights at the end of each epoch
         loss_weights.manage_epoch_weights(epoch + 1)
         
@@ -540,8 +669,8 @@ def network_training(train_dataloader, val_dataloader, generator, discriminator,
             break
 
         # Step the learning rate scheduler based on the average combined score
-        gen_scheduler.step(avg_combined_score)
-        dis_scheduler.step(avg_combined_score)
+        gen_scheduler.step(gen_loss)
+        dis_scheduler.step(dis_loss)
 
         # Reset for next epoch 
         psnrs.clear()
@@ -564,11 +693,17 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     # Load the dataset
-    train_dataloader, val_dataloader = load_dataset()
+    train_dataloader, val_dataloader = load_dataset(preload_images=False)
 
     # Instantiate the generator and discriminator
-    generator, discriminator = instantiate_networks()
-
+    generator, discriminator = instantiate_networks(
+        type        = 'unet_512', 
+        num_downs   = 7, 
+        ngf         = 160, 
+        norm_type   = 'instance',
+        use_dropout = False
+    )
+    
     # Load the model weights if available
     generator = load_model_weights(generator, MODEL_WEIGHTS_PATH)
 
@@ -578,5 +713,24 @@ if __name__ == "__main__":
     # Train the network
     network_training(train_dataloader, val_dataloader, generator, discriminator, gen_optim, dis_optim)
 
+    print("Done!")
 
 
+# Debugging Tips
+
+
+# Gradient Flows:
+
+# Verify that the gradients are flowing as expected by 
+    # checking if gen_loss.backward() and dis_loss.backward() are effectively updating the model parameters. 
+    # You can print out gradients for some parameters before and after the backward() call to confirm this.
+
+
+# Loss Scale:
+    
+
+# Incorporate Feature Matching Loss:
+# To improve the perceptual quality further, consider adding a feature matching loss, which minimizes the difference between the feature maps of the real and generated images as computed by an intermediate layer of the discriminator.
+
+# Introduce a Focus Mechanism:
+# For tasks such as reconstructing inscriptions, certain regions of the image are more important than others. A spatial transformer network or an attention mechanism could be used to focus the generator on regions of interest.

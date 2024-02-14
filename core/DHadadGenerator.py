@@ -32,6 +32,10 @@ from attention_mechanisms.ChannelAttention   import ChannelAttention
 # Instead of applying attention within a layer, layer attention mechanisms aggregate information across different layers. This can be particularly effective in U-Net architectures where features from different scales are combined.
 
 
+# Gradient Penalty for Generator:
+# Consider adding a gradient penalty to the generator similar to the discriminator. 
+# This helps in stabilizing the training and ensuring that the generator's gradients don't grow too large.
+
 # Residual Block
 class ResidualBlock(Module):
     """
@@ -75,7 +79,7 @@ class DHadadGenerator(Module):
         The model also uses self-attention and multi-head attention layers.
     """
     def __init__(self, in_channels, out_channels, 
-        filter_sizes=[32, 64, 96, 128, 256, 384, 512, 1024], num_residual_blocks = 1, dropout_prob=0.2):
+        filter_sizes=[32, 64, 96, 128, 256, 384, 512, 1024], num_residual_blocks = 1, dropout_prob=0.5):
         """
             in_channels: Number of input channels
             out_channels: Number of output channels
@@ -95,12 +99,12 @@ class DHadadGenerator(Module):
         # Initialize the weights using He initialization
         self.apply(self.initialize_weights)
 
-        # Dropout layer
+        # Dropout layer trinable true
         self.dropout = Dropout(dropout_prob)
 
         # Add Self-Attention layers
         self.self_attention_128  = SelfAttention(filter_sizes[3]) # 128
-        self.self_attention_256  = SelfAttention(filter_sizes[4]) # 256
+        #self.self_attention_256  = SelfAttention(filter_sizes[4]) # 256
         self.self_attention_512  = SelfAttention(filter_sizes[6]) # 512
         self.self_attention_1024 = SelfAttention(filter_sizes[7]) # 1024
 
@@ -163,8 +167,8 @@ class DHadadGenerator(Module):
                 self.cbam_blocks_dec.append(CBAM(reversed_filter_sized[idx + 1]))
 
     # Convolutional block
-    def conv_block(self, in_channels, out_channels, batch_norm=True, activation=LeakyReLU(0.2, inplace=False)):
-        layers = [spectral_norm(nn.Conv2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1))]
+    def conv_block(self, in_channels, out_channels, batch_norm=True, activation=LeakyReLU(0.2, inplace = False)):
+        layers = [spectral_norm(nn.Conv2d(in_channels, out_channels, kernel_size = 4, stride = 2, padding = 1))]
         
         if batch_norm:
             layers.append(InstanceNorm2d(out_channels))
@@ -174,8 +178,8 @@ class DHadadGenerator(Module):
         return Sequential(*layers)
 
     # Deconvolutional block
-    def deconv_block(self, in_channels, out_channels, batch_norm=True, activation=LeakyReLU(0.2, inplace=False)):
-        layers = [ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)]
+    def deconv_block(self, in_channels, out_channels, batch_norm=True, activation=LeakyReLU(0.2, inplace = False), dropout=True):
+        layers = [ConvTranspose2d(in_channels, out_channels, kernel_size = 4, stride = 2, padding=1)]
         
         if batch_norm:
             layers.append(InstanceNorm2d(out_channels))
@@ -219,14 +223,14 @@ class DHadadGenerator(Module):
             # Apply self-attention
             if idx == 3:
                 x = self.self_attention_128(x)
-            elif idx == 4:
-                x = self.self_attention_256(x)
+            # elif idx == 4:
+            #     x = self.self_attention_256(x)
             elif idx == 6:
                 x = self.self_attention_512(x)
 
         # Decoder with skip connections
         for idx, decoder in enumerate(self.decoders):
-            x = decoder(self.dropout(x) if idx < 2 else x)
+            x = decoder(self.dropout(x) if idx < 3 else x)
 
             # Apply CBAM and residual blocks except for the last layer
             if idx < len(self.decoders) - 1:
@@ -260,3 +264,4 @@ class DHadadGenerator(Module):
             xavier_normal_(m.weight)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
+

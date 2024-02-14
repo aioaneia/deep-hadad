@@ -7,28 +7,28 @@ import cv2
 import glob
 import os
 import numpy as np
+import functools
+import torch.nn as nn
 
 from torchvision.transforms import ToPILImage, Compose, Resize, Lambda, ToTensor
 
-from PIL         import Image
+from PIL import Image
 
-# import the networks
-from core.DHadadGenerator import DHadadGenerator
+from core.UnetGenerator import UnetGenerator
 
 # Constants
 PROJECT_PATH      = './'
 test_dataset_path = PROJECT_PATH + "data/test_dataset/"
-est_dataset_path = PROJECT_PATH + "data/test_dataset/Estimation"
-
-IMAGE_EXTENSIONS      = [".png", ".jpg", ".tif"]
+est_dataset_path  = PROJECT_PATH + "data/test_dataset/Estimation"
+IMAGE_EXTENSIONS  = [".png", ".jpg", ".tif"]
 
 MODEL_PATH   = PROJECT_PATH + 'models/'
-MODEL_NAME   = 'dh_depth_model_ep_10_r1.00_p0.80_a0.60_g1.50_d1.20_s1.00.pth'
+MODEL_NAME   = 'dh_depth_model_ep_6_l0.75_s0.25_a0.05_d0.15_s0.01_g0.01.pth'
 
 transform = Compose([
-  Resize((512, 512)),
-  Lambda(lambda x: x.convert('L')),
-  ToTensor(),
+    Resize((512, 512)),
+    Lambda(lambda x: x.convert('L')),
+    ToTensor(),
 ])
 
 to_pil = ToPILImage()
@@ -55,6 +55,24 @@ def load_model(model, model_path):
     return model
 
 
+def get_norm_layer(norm_type='instance'):
+    """Return a normalization layer
+
+    Parameters:
+        norm_type (str) -- the name of the normalization layer: batch | instance | none
+
+    For BatchNorm, we use learnable affine parameters and track running statistics (mean/stddev).
+    For InstanceNorm, we do not use learnable affine parameters. We do not track running statistics.
+    """
+    if norm_type == 'batch':
+        norm_layer = functools.partial(nn.BatchNorm2d, affine = True, track_running_stats=True)
+    elif norm_type == 'instance':
+        norm_layer = functools.partial(nn.InstanceNorm2d, affine = False, track_running_stats=False)
+    else:
+        raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
+    
+    return norm_layer
+
 def load_dh_generator():
     """
     Loads the generator for the DHadad model
@@ -64,8 +82,20 @@ def load_dh_generator():
     gen_in_channels  = 1  # grayscale images, 3 for RGB images
     gen_out_channels = 1  # to generate grayscale restored images, change as needed
 
+    # Get the normalization layer
+    norm_layer = get_norm_layer(norm_type='instance')
+
     # Instantiate the generator with the specified channel configurations
-    generator = DHadadGenerator(gen_in_channels, gen_out_channels)
+    generator = UnetGenerator(
+        gen_in_channels, 
+        gen_out_channels, 
+        num_downs   = 7, 
+        ngf         = 160,
+        norm_layer  = norm_layer, 
+        use_dropout = False
+    ).to(device)
+
+    generator.apply(generator.initialize_weights)
 
     return generator
 
@@ -86,18 +116,6 @@ def load_dataset(dataset_path):
 
     return image_paths
 
-# def load_test_dataset(dataset_path):
-#     """
-#     Loads the test dataset
-#     :param dataset_path: The path to the test dataset
-#     :return: The test dataset
-#     """
-
-#     # Load the test dataset
-#     test_dataset = datasets.ImageFolder(dataset_path, transform=transform)
-
-#     return test_dataset
-
 
 def generate_restored_image(generator, test_image_tensor, invert_pixel_values=True):
     """
@@ -114,6 +132,9 @@ def generate_restored_image(generator, test_image_tensor, invert_pixel_values=Tr
 
         # Generate the restored image and remove the batch dimension
         restored_image = generator(broken_image).squeeze(0).cpu()
+
+        # Normalize the image to the range [0, 1]
+        restored_image = (restored_image - restored_image.min()) / (restored_image.max() - restored_image.min())
 
     # Invert the pixel values
     if invert_pixel_values == True:
@@ -139,15 +160,13 @@ def generate_restored_images(generator, test_dataset):
         d_map = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         
         # Convert the NumPy array to a PIL Image
-        d_map = Image.fromarray(d_map)
+        d_map_pil = Image.fromarray(d_map)
 
         # Transform the image
-        image_tensor = transform(d_map).to(device)
+        image_tensor = transform(d_map_pil).to(device)
 
         # Generate the restored image
         restored_image = generate_restored_image(generator, image_tensor, invert_pixel_values=False)
-
-        #render_image = np.concatenate((image, displacement_map), axis=2)
 
         # Add the restored image to the list
         table_images.append({
@@ -215,7 +234,7 @@ def plot_images(table_images, cmap='gray'):
         axes[0].axis('off')
 
         # Show restored image
-        axes[1].imshow(table_image['res_label'], cmap=cmap)
+        axes[1].imshow(table_image['res_image'], cmap=cmap)
         axes[1].set_title('Restored Image')
         axes[1].axis('off')
 
@@ -234,11 +253,39 @@ def save_images(table_images):
     #restored_image_pil.save(PROJECT_PATH + "data/test_dataset/X_image.png")
     pass
 
+from bkp.pix2pix_model import GAN
+from bkp.pix2pix_model import get_discriminator, get_generator
+
+# Function to load model
+def load_pix2pix_model(model_path):
+    
+    # Get the image shape
+    image_shape = (512, 512, 1)
+
+    # Instantiate the generator
+    generator = get_generator(image_shape)
+
+    # Instantiate the discriminator
+    discriminator = get_discriminator(image_shape)
+
+    # Instantiate the GAN model
+    model = GAN(discriminator, generator)
+
+    model.load_state_dict(torch.load(model_path), strict=False)
+
+    model.eval()
+
+    return model
 
 if __name__ == "__main__":
-    # Load the generator
+
+    # Later, to load the model (assuming the GAN class definition is available):
+    #pix2pix_model = load_pix2pix_model(MODEL_PATH + GAN_MODEL_NAME)
+    # Get the generator from the GAN model
+    #generator = pix2pix_model.generator
+
+    # Load the DHadad generator
     generator = load_dh_generator()
-    
     generator = load_model(generator, MODEL_PATH + MODEL_NAME)
 
     # Load the test dataset

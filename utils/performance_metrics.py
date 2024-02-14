@@ -38,11 +38,11 @@ from pytorch_msssim import ssim
 # https://www.mathworks.com/help/images/ref/psnr.html
 # https://www.mathworks.com/help/images/peak-signal-to-noise-ratio-psnr.html
 ########################################################################################
-def compute_psnr(img1, img2):
+def compute_psnr(img1, img2, max_psnr=100):
     mse = F.mse_loss(img1, img2)
 
     if mse == 0:
-        return float('inf')
+        return max_psnr
 
     # Add a small positive number inside the square root 
     # to ensure the input is always non-negative
@@ -98,6 +98,8 @@ class SobelFilter(nn.Module):
 # - Structure (s): The structure comparison is based on the covariance of the original
 #   and reconstructed images.
 ########################################################################################
+sobel = SobelFilter()
+
 def compute_edge_similarity(img1, img2):
     """
     Computes the edge similarity index (ESI) between two images.
@@ -105,7 +107,7 @@ def compute_edge_similarity(img1, img2):
     :param img2: The second image
     :return: The ESI between the two images
     """
-    sobel = SobelFilter().to(img1.device)
+    sobel.to(img1.device)
 
     edge1 = sobel(img1)
     edge2 = sobel(img2)
@@ -131,22 +133,28 @@ def print_performance_metrics(epoch, num_epochs, epoch_time, loss_weights,
                             avg_ssim, min_ssim, max_ssim, std_ssim,
                             avg_esi, min_esi, max_esi, std_esi,
                             avg_combined_score, performance_metrics,                          
-                            gen_loss, dis_loss, gen_optim, dis_optim):
-    print("")
+                            gen_loss, loss_components, dis_loss, gen_optim, dis_optim):
+    print("---------------------------------------------------------------------------------------------------")
     print(f" Epoch:                    {epoch}/{num_epochs}")
     print(f" Time:                     {epoch_time:.2f}s Current: {time.strftime('%H:%M:%S', time.gmtime())}")
-    print(f" Epoch Loss Weights:       {loss_weights.weights}")
     print(f" Epoch Average PSNR:       {avg_psnr:.4f} (Min: {min_psnr:.4f}, Max: {max_psnr:.4f}, Std: {std_psnr:.4f})")
     print(f" Epoch Average SSIM:       {avg_ssim:.4f} (Min: {min_ssim:.4f}, Max: {max_ssim:.4f}, Std: {std_ssim:.4f})")
     print(f" Epoch Average ESI:        {avg_esi:.4f}  (Min: {min_esi:.4f},  Max: {max_esi:.4f},  Std: {std_esi:.4f})")
     print(f" Epoch Combined Score:     {avg_combined_score:.4f}")
-    print(f" Epoch Generator Loss:     {gen_loss.item():.4f}")
-    print(f" Epoch Discriminator Loss: {dis_loss.item():.4f}")
+    print(f" Epoch Loss Weights:       {loss_weights.weights}")
+    print(f" Epoch Generator Loss:     {gen_loss:.4f}")
+    print(f" Epoch L1 Loss:            {loss_components[0].item():.4f}")
+    print(f" Epoch SSIM Loss:          {loss_components[1].item():.4f}")
+    print(f" Epoch Adv Loss:           {loss_components[2].item():.4f}")
+    print(f" Eposh Depth Loss:         {loss_components[3].item():.4f}")
+    print(f" Epoch Sharp Loss:         {loss_components[4].item():.4f}")
+    print(f" Epoch Geom Loss:          {loss_components[5].item():.4f}")
+    print(f" Epoch Discriminator Loss: {dis_loss:.4f}")
     print(f" Epoch Generator LR:       {gen_optim.param_groups[0]['lr']:.6f}")
     print(f" Epoch Discriminator LR:   {dis_optim.param_groups[0]['lr']:.6f}")
     print(f" Epoch Performance:        {performance_metrics}")
+    print("---------------------------------------------------------------------------------------------------")
     print("")
-
 
 ########################################################################################
 # Main

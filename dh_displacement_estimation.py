@@ -10,7 +10,6 @@ import configparser
 import logging
 
 import torch
-import urllib.request
 import matplotlib.pyplot as plt
 
 # Read parameters from a configuration file
@@ -191,7 +190,7 @@ if __name__ == "__main__":
     validate_directories(paths)
 
     # Load the displacement images
-    inscriptions_images = load_inscriptions_images_from_directory(inscriptions_dataset_path, dir_regex=r'ToOrg')
+    inscriptions_images = load_inscriptions_images_from_directory(inscriptions_dataset_path, dir_regex=r'KAI 24')
 
     # Extracting only the image data from each tuple
     images_only = [img for _, img in inscriptions_images]
