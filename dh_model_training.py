@@ -1,37 +1,32 @@
-import os
-import time
-import sys
-import numpy as np
-import logging
-import glob
-import torch
 import functools
+import glob
+import logging
+import os
+import sys
+import time
 
-from torch import nn
-from torch.nn.utils           import clip_grad_norm_
-from torch.utils.data         import DataLoader
-from torch.optim              import Adam
-from torch.optim              import lr_scheduler
-
-from torch.cuda.amp import GradScaler, autocast
-
-from torchvision import transforms
-
+import numpy as np
+import torch
 from PIL import Image
-
 from sklearn.model_selection import train_test_split
+from torch import nn
+from torch.nn.utils import clip_grad_norm_
+from torch.optim import Adam
+from torch.optim import lr_scheduler
+from torch.utils.data import DataLoader
+from torchvision import transforms
 
 # Add the project directory to the Python path
 sys.path.append('./')
 
 # Import the DeepHadad networks
-from core.DHadadGenerator       import DHadadGenerator
-from core.UnetGenerator         import UnetGenerator
-from core.PatchGANDiscriminator import build_discriminator as DHadadDiscriminator
-from core.DHadadLossFunctions   import DHadadLossFunctions
-from core.DHadadLossWeights     import DHadadLossWeights
+from models.DHadadGenerator import DHadadGenerator
+from models.UnetGenerator import UnetGenerator
+from models.PatchGANDiscriminator import build_discriminator as DHadadDiscriminator
+from models.DHadadLossFunctions import DHadadLossFunctions
+from models.DHadadLossWeights import DHadadLossWeights
 
-from utils.DisplacementMapDataset  import DisplacementMapDataset
+from utils.DisplacementMapDataset import DisplacementMapDataset
 
 import utils.performance_metrics as dh_metrics
 
@@ -57,37 +52,37 @@ else:
 print("PyTorch version: " + torch.__version__)
 
 # Set hyperparameter values for training 
-generator_lr        = 0.0002
-discriminator_lr    = 0.0003
-batch_size          = 2
-num_epochs          = 100
+generator_lr = 0.0002
+discriminator_lr = 0.0003
+batch_size = 1
+num_epochs = 100
 checkpoint_interval = 3
-max_grad_norm       = 1.0
-patience            = 100
+max_grad_norm = 1.0
+patience = 100
 improvement_threshold = 0.004  # 1% improvement
-lambda_gp           = 10    # The gradient penalty coefficient
-weights_type        = 'depth' #
+lambda_gp = 10  # The gradient penalty coefficient
+weights_type = 'depth'  #
 
 # Number of critic updates per generator update
 critic_updates_per_gen_update = 2
 
 # Set the project paths
-PROJECT_PATH            = './'
-TRAINING_DATASET_PATH   = PROJECT_PATH + 'data/small_training_dataset'
+PROJECT_PATH = './'
+TRAINING_DATASET_PATH = PROJECT_PATH + 'data/small_training_dataset'
 X_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/X'
 Y_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/Y'
-MODEL_PATH              = PROJECT_PATH + 'models/'
-MODEL_WEIGHTS_PATH      = MODEL_PATH + 'dh_depth_model_ep_1_l100.00_s20.00_t5.00_a30.00.pth'
 
-IMAGE_EXTENSIONS        = [".png", ".jpg", ".tif"]
+MODEL_PATH = PROJECT_PATH + 'trained_models/'
+MODEL_WEIGHTS_PATH = MODEL_PATH + 'dh_depth_model_ep_1_l100.00_s20.00_t5.00_a30.00.pth'
 
-
+IMAGE_EXTENSIONS = [".png", ".jpg", ".tif"]
 
 # Dynamic Loss Weights for adjusting the loss weights during training
-loss_weights  = DHadadLossWeights(weights_type=weights_type)
+loss_weights = DHadadLossWeights(weights_type=weights_type)
 
 # Loss Functions
 loss_functions = DHadadLossFunctions()
+
 
 # Get the paths of all images in a directory
 def get_image_paths(directory):
@@ -102,32 +97,34 @@ def get_image_paths(directory):
 def calculate_mean_and_std(real_image_paths, synthetic_image_paths, common_transforms):
     # Calculate mean and std for the dataset
     mean = 0.
-    std  = 0.
+    std = 0.
 
-     # Use a subset to calculate mean and std for efficiency
-    subset_intact_image_paths  = real_image_paths[:100]
+    # Use a subset to calculate mean and std for efficiency
+    subset_intact_image_paths = real_image_paths[:100]
     subset_damaged_image_paths = synthetic_image_paths[:100]
-    min_val, max_val           = float('inf'), -float('inf')
+    min_val, max_val = float('inf'), -float('inf')
 
     for file_path in subset_damaged_image_paths:
-        image     = Image.open(file_path)
-        tensor    = common_transforms(image)
+        image = Image.open(file_path)
+        tensor = common_transforms(image)
 
         min_val = min(min_val, tensor.min().item())
         max_val = max(max_val, tensor.max().item())
-    
+
     print(f"Minimum pixel value in the dataset: {min_val}")
     print(f"Maximum pixel value in the dataset: {max_val}")
 
-    for images, _ in DataLoader(DisplacementMapDataset(subset_intact_image_paths, subset_damaged_image_paths, transform=common_transforms), batch_size=batch_size):
-        images       = images.to(device)  # Move images to GPU
+    for images, _ in DataLoader(
+            DisplacementMapDataset(subset_intact_image_paths, subset_damaged_image_paths, transform=common_transforms),
+            batch_size=batch_size):
+        images = images.to(device)  # Move images to GPU
         batch_samples = len(images)  # Use len() to get the number of images in the batch
-        images       = images.view(batch_samples, images.size(1), -1)
-        mean      += images.mean(2).sum(0)
-        std        += images.std(2).sum(0)
+        images = images.view(batch_samples, images.size(1), -1)
+        mean += images.mean(2).sum(0)
+        std += images.std(2).sum(0)
 
     mean /= len(real_image_paths)
-    std  /= len(synthetic_image_paths)
+    std /= len(synthetic_image_paths)
 
     # Now mean and std should be tensors of size 1
     print(mean.size())  # Should print torch.Size([1])
@@ -136,13 +133,13 @@ def calculate_mean_and_std(real_image_paths, synthetic_image_paths, common_trans
     return mean, std
 
 
-def load_dataset(preload_images = False):
+def load_dataset(preload_images=False):
     """
     Loads the training dataset
     :return: The dataloaders for both training dataset and validation dataset
     """
     # Get images from path
-    intact_image_paths  = get_image_paths(X_TRAINING_DATASET_PATH)
+    intact_image_paths = get_image_paths(X_TRAINING_DATASET_PATH)
     damaged_image_paths = get_image_paths(Y_TRAINING_DATASET_PATH)
 
     print(f"Path to Intact Images:    {X_TRAINING_DATASET_PATH}")
@@ -167,7 +164,7 @@ def load_dataset(preload_images = False):
 
     # Data Augmentation for the Real Images
     image_transforms = transforms.Compose([
-        transforms.RandomRotation(10), 
+        transforms.RandomRotation(10),
         common_transforms,
         transforms.Normalize(mean=mean.tolist(), std=std.tolist())
     ])
@@ -177,11 +174,12 @@ def load_dataset(preload_images = False):
     # The random seed is set to 42 so that the results are reproducible. 
     # Random seed represents the starting point for the random number generator. If you set it to 1
     train_real, val_real, train_synthetic, val_synthetic = train_test_split(
-        intact_image_paths, damaged_image_paths, test_size = 0.2, shuffle=False, random_state = None)
+        intact_image_paths, damaged_image_paths, test_size=0.2, shuffle=False, random_state=None)
 
     # Create training and validation datasets and dataloaders
-    train_dataset = DisplacementMapDataset(train_real, train_synthetic, transform = image_transforms, preload_images = False)
-    val_dataset   = DisplacementMapDataset(val_real,   val_synthetic,   transform = image_transforms, preload_images = False)
+    train_dataset = DisplacementMapDataset(train_real, train_synthetic, transform=image_transforms,
+                                           preload_images=False)
+    val_dataset = DisplacementMapDataset(val_real, val_synthetic, transform=image_transforms, preload_images=False)
 
     # Create dataset and dataloader
     # The dataloader will return a list of [real, synthetic] images for each batch of images
@@ -192,10 +190,11 @@ def load_dataset(preload_images = False):
     # the order of the images is important because we're using the same index to retrieve the images
     # from the real and synthetic folders
     # the number of workers is set to 0 because we're using a small dataset
-    train_dataloader = DataLoader(train_dataset, batch_size = batch_size, shuffle = False, num_workers = 0)
-    val_dataloader   = DataLoader(val_dataset,   batch_size = batch_size, shuffle = False, num_workers = 0)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
     return train_dataloader, val_dataloader
+
 
 def get_norm_layer(norm_type='instance'):
     """Return a normalization layer
@@ -208,13 +207,13 @@ def get_norm_layer(norm_type='instance'):
     """
 
     if norm_type == 'batch':
-        norm_layer = functools.partial(nn.BatchNorm2d, affine = True, track_running_stats=True)
+        norm_layer = functools.partial(nn.BatchNorm2d, affine=True, track_running_stats=True)
     elif norm_type == 'instance':
-        norm_layer = functools.partial(nn.InstanceNorm2d, affine = False, track_running_stats=False)
+        norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
     elif norm_type == 'group':
-        norm_layer = functools.partial(nn.GroupNorm, num_groups = 32, affine=True)
+        norm_layer = functools.partial(nn.GroupNorm, num_groups=32, affine=True)
     elif norm_type == 'layer':
-        norm_layer = functools.partial(nn.LayerNorm, normalized_shape = [512, 512])
+        norm_layer = functools.partial(nn.LayerNorm, normalized_shape=[512, 512])
     else:
         raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
 
@@ -225,7 +224,8 @@ def get_norm_layer(norm_type='instance'):
 # Instantiate the generator and discriminator
 
 ########################################################################################
-def instantiate_networks(type='unet_512', num_downs=7, ngf=128, norm_type='instance', use_dropout=False, use_se_block=False):
+def instantiate_networks(type='unet_512', num_downs=7, ngf=128, norm_type='instance', use_dropout=False,
+                         use_se_block=False):
     """
     Instantiates the generator and discriminator
     :param type: The type of network to instantiate (dh, unet, or resnet)
@@ -233,36 +233,36 @@ def instantiate_networks(type='unet_512', num_downs=7, ngf=128, norm_type='insta
     """
 
     # grayscale images, 3 for RGB images
-    gen_in_channels  = 1
+    gen_in_channels = 1
     # to generate grayscale restored images 
-    gen_out_channels = 1 
+    gen_out_channels = 1
 
-    norm_layer = get_norm_layer(norm_type = norm_type)
+    norm_layer = get_norm_layer(norm_type=norm_type)
 
     # Instantiate the generator with the specified channel configurations
     if type == 'dh':
         generator = DHadadGenerator(gen_in_channels, gen_out_channels).to(device)
     elif type == 'unet_128':
         generator = UnetGenerator(
-            gen_in_channels, gen_out_channels, 7, norm_layer = norm_layer, use_dropout = True
+            gen_in_channels, gen_out_channels, 7, norm_layer=norm_layer, use_dropout=True
         ).to(device)
     elif type == 'unet_256':
         generator = UnetGenerator(
-            gen_in_channels, 
-            gen_out_channels, 
-            num_downs   = 8,
-            ngf         = ngf, 
-            norm_layer  = norm_layer, 
-            use_dropout = use_dropout
+            gen_in_channels,
+            gen_out_channels,
+            num_downs=8,
+            ngf=ngf,
+            norm_layer=norm_layer,
+            use_dropout=use_dropout
         ).to(device)
     elif type == 'unet_512':
         generator = UnetGenerator(
             gen_in_channels,
             gen_out_channels,
-            num_downs   = num_downs,
-            ngf         = ngf,
-            norm_layer  = norm_layer,
-            use_dropout = use_dropout
+            num_downs=num_downs,
+            ngf=ngf,
+            norm_layer=norm_layer,
+            use_dropout=use_dropout
         ).to(device)
 
         generator.apply(generator.initialize_weights)
@@ -271,17 +271,17 @@ def instantiate_networks(type='unet_512', num_downs=7, ngf=128, norm_type='insta
     else:
         print(f"Error: Unknown network type {type}")
         return None
-    
+
     # Specify the input channel configurations (it typically takes two inputs)
     # we assume we're providing pairs of images (intact and restored) as input
     disc_in_channels = 1
 
     discriminator = DHadadDiscriminator(
         disc_in_channels,
-        filter_sizes = [64, 128, 256, 512, 512, 512, 1024],
-        use_dropout  = use_dropout,
-        use_se_block = use_se_block
-        ).to(device)
+        filter_sizes=[64, 128, 256, 512, 512, 512, 1024],
+        use_dropout=use_dropout,
+        use_se_block=use_se_block
+    ).to(device)
 
     return generator, discriminator
 
@@ -315,13 +315,13 @@ def load_model_weights(model, model_path):
 ########################################################################################
 def init_optimizer(generator, discriminator):
     # Initialize optimizers
-    gen_optim = Adam(generator.parameters(),     lr = generator_lr,     betas = (0.5, 0.999), amsgrad=True)
-    dis_optim = Adam(discriminator.parameters(), lr = discriminator_lr, betas = (0.5, 0.999), amsgrad=True)
+    gen_optim = Adam(generator.parameters(), lr=generator_lr, betas=(0.5, 0.999), amsgrad=True)
+    dis_optim = Adam(discriminator.parameters(), lr=discriminator_lr, betas=(0.5, 0.999), amsgrad=True)
 
     return gen_optim, dis_optim
 
 
-def init_schedulers(gen_optim, dis_optim, opt = "plateau"):
+def init_schedulers(gen_optim, dis_optim, opt="plateau"):
     """Return a learning rate scheduler
 
     Parameters:
@@ -339,6 +339,7 @@ def init_schedulers(gen_optim, dis_optim, opt = "plateau"):
         def lambda_rule(epoch):
             lr_l = 1.0 - max(0, epoch + opt.epoch_count - opt.n_epochs) / float(opt.n_epochs_decay + 1)
             return lr_l
+
         gen_scheduler = lr_scheduler.LambdaLR(gen_optim, lr_lambda=lambda_rule)
     elif opt == 'step':
         gen_scheduler = lr_scheduler.StepLR(gen_optim, step_size=opt.lr_decay_iters, gamma=0.1)
@@ -357,7 +358,7 @@ def train_discriminator_step(discriminator, dis_optim, damaged_dm, enhanced_dm, 
     """
         Update Discriminator Step
     """
-    
+
     for _ in range(critic_updates_per_gen_update):
         dis_optim.zero_grad()
 
@@ -373,26 +374,27 @@ def train_discriminator_step(discriminator, dis_optim, damaged_dm, enhanced_dm, 
         fake_labels = torch.zeros_like(output_fake, device=device)
 
         # Compute gradient penalty
-        gradient_penalty = loss_functions.compute_gradient_penalty(discriminator, damaged_dm, fake_dm, enhanced_dm) * lambda_gp
+        gradient_penalty = loss_functions.compute_gradient_penalty(discriminator, damaged_dm, fake_dm,
+                                                                   enhanced_dm) * lambda_gp
 
         # Compute the total discriminator loss
         real_loss = loss_functions.adversarial_loss(output_real, real_labels)
         fake_loss = loss_functions.adversarial_loss(output_fake, fake_labels)
         dis_loss = (real_loss + fake_loss) / 2 + lambda_gp * gradient_penalty
 
-       # print_gradients(discriminator, "Discriminator gradients before backward:")
+        # print_gradients(discriminator, "Discriminator gradients before backward:")
 
         # Compute gradients
         dis_loss.backward()
-        
-        #print_gradients(discriminator, "Discriminator gradients after backward:")
+
+        # print_gradients(discriminator, "Discriminator gradients after backward:")
 
         # Clip gradients for discriminator
         clip_grad_norm_(discriminator.parameters(), max_norm=max_grad_norm)
-        
+
         # Optimize
         dis_optim.step()
-    
+
     return dis_loss
 
 
@@ -403,20 +405,20 @@ def train_generator_step(generator, gen_optim, fake_dm, real_dm, fake_for_gen, m
 
     gen_optim.zero_grad()
 
-    l1_loss    = loss_functions.l1_loss(fake_dm, real_dm)
-    adv_loss   = loss_functions.adversarial_loss(fake_for_gen, misleading_labels)
-    ssim_loss  = loss_functions.ssim_loss(fake_dm, real_dm)
+    l1_loss = loss_functions.l1_loss(fake_dm, real_dm)
+    adv_loss = loss_functions.adversarial_loss(fake_for_gen, misleading_labels)
+    ssim_loss = loss_functions.ssim_loss(fake_dm, real_dm)
     depth_loss = loss_functions.depth_consistency_loss(fake_dm, real_dm)
     sharp_loss = loss_functions.sharpness_loss(fake_dm, real_dm)
-    geom_loss  = loss_functions.geometric_consistency_loss(fake_dm, real_dm)
-    
+    geom_loss = loss_functions.geometric_consistency_loss(fake_dm, real_dm)
+
     gen_loss = (
-        loss_weights.weights['l1']          * l1_loss    + \
-        loss_weights.weights['adversarial'] * adv_loss   + \
-        loss_weights.weights['ssim']        * ssim_loss  + \
-        loss_weights.weights['depth']       * depth_loss + \
-        loss_weights.weights['geometric']   * geom_loss  + \
-        loss_weights.weights['sharp']       * sharp_loss
+            loss_weights.weights['l1'] * l1_loss + \
+            loss_weights.weights['adversarial'] * adv_loss + \
+            loss_weights.weights['ssim'] * ssim_loss + \
+            loss_weights.weights['depth'] * depth_loss + \
+            loss_weights.weights['geometric'] * geom_loss + \
+            loss_weights.weights['sharp'] * sharp_loss
     )
 
     # Check if gen_loss is None
@@ -428,11 +430,11 @@ def train_generator_step(generator, gen_optim, fake_dm, real_dm, fake_for_gen, m
         raise ValueError("Generator loss (gen_loss) is not a scalar. It must be a 0-dimensional tensor.")
 
     # Backprop
-    #print_gradients(generator, "Generator gradients before backward:")
+    # print_gradients(generator, "Generator gradients before backward:")
 
     gen_loss.backward()
-    
-    #print_gradients(generator, "Generator gradients after backward:")
+
+    # print_gradients(generator, "Generator gradients after backward:")
 
     # Clip gradients for generator
     clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
@@ -442,7 +444,7 @@ def train_generator_step(generator, gen_optim, fake_dm, real_dm, fake_for_gen, m
 
     return gen_loss, [l1_loss, adv_loss, ssim_loss, depth_loss, sharp_loss, geom_loss]
 
-    
+
 def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader):
     """
     Training step for each batch
@@ -456,11 +458,11 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader)
 
     for i, (damaged_dm, enhanced_dm) in enumerate(train_dataloader):
         # Move images to GPU
-        damaged_dm  = damaged_dm.to(device)
+        damaged_dm = damaged_dm.to(device)
         enhanced_dm = enhanced_dm.to(device)
 
         # Generate fake data for discriminator training and detach it
-        fake_dm  = generator(damaged_dm).detach()
+        fake_dm = generator(damaged_dm).detach()
         dis_loss = train_discriminator_step(discriminator, dis_optim, damaged_dm, enhanced_dm, fake_dm)
 
         # Generate fake data for generator training (do not detach)
@@ -469,17 +471,19 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader)
         # # Freeze discriminator's parameters
         for param in discriminator.parameters():
             param.requires_grad = False
-        
-        combined_damaged_fake     = torch.cat([damaged_dm, fake_dm], dim=1)
-        fake_for_gen              = discriminator(combined_damaged_fake)
-        misleading_labels         = torch.ones_like(fake_for_gen, device=device)
-        gen_loss, loss_components = train_generator_step(generator, gen_optim, fake_dm_for_gen, enhanced_dm, fake_for_gen, misleading_labels)
-        
+
+        combined_damaged_fake = torch.cat([damaged_dm, fake_dm], dim=1)
+        fake_for_gen = discriminator(combined_damaged_fake)
+        misleading_labels = torch.ones_like(fake_for_gen, device=device)
+        gen_loss, loss_components = train_generator_step(generator, gen_optim, fake_dm_for_gen, enhanced_dm,
+                                                         fake_for_gen, misleading_labels)
+
         # Unfreeze discriminator's parameters after generator training
         for param in discriminator.parameters():
             param.requires_grad = True
 
     return gen_loss, loss_components, dis_loss
+
 
 def validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis, max_grad_norm):
     """
@@ -491,21 +495,21 @@ def validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis
 
     with torch.no_grad():
         # Clip val gradients
-        #clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
+        # clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
 
         for real_dm, synthetic_dm in val_dataloader:
-            real_dm      = real_dm.to(device)
+            real_dm = real_dm.to(device)
             synthetic_dm = synthetic_dm.to(device)
-            enhanced_dm  = generator(real_dm)
+            enhanced_dm = generator(real_dm)
 
             # Clamp the values to be between 0 and 1
-            enhanced_dm  = enhanced_dm.clamp(0, 1)
+            enhanced_dm = enhanced_dm.clamp(0, 1)
             synthetic_dm = synthetic_dm.clamp(0, 1)
 
             # Compute PSNR, SSIM, ESI for the current batch
             batch_psnr = dh_metrics.compute_psnr(enhanced_dm, synthetic_dm)
             batch_ssim = dh_metrics.compute_ssim(enhanced_dm, synthetic_dm)
-            batch_esi  = dh_metrics.compute_edge_similarity(enhanced_dm, synthetic_dm)
+            batch_esi = dh_metrics.compute_edge_similarity(enhanced_dm, synthetic_dm)
 
             # Update epoch metrics
             psnrs.append(batch_psnr)
@@ -517,7 +521,7 @@ def validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis
     discriminator.train()
 
 
-def calculate_performance_metrics(epoch, best_psnr, psnrs, best_ssim, ssims, best_esi, esis, 
+def calculate_performance_metrics(epoch, best_psnr, psnrs, best_ssim, ssims, best_esi, esis,
                                   epoch_time, gen_loss, loss_components, dis_loss, gen_optim, dis_optim):
     """
     Calculate the performance metrics for the current epoch
@@ -525,12 +529,12 @@ def calculate_performance_metrics(epoch, best_psnr, psnrs, best_ssim, ssims, bes
     # Move tensors to CPU and convert to float
     psnrs_cpu = [x.cpu().item() if torch.is_tensor(x) else x for x in psnrs]
     ssims_cpu = [x.cpu().item() if torch.is_tensor(x) else x for x in ssims]
-    esis_cpu  = [x.cpu().item() if torch.is_tensor(x) else x for x in esis]
+    esis_cpu = [x.cpu().item() if torch.is_tensor(x) else x for x in esis]
 
     # Calculate min and max values
     min_psnr, max_psnr = np.min(psnrs_cpu), np.max(psnrs_cpu)
     min_ssim, max_ssim = np.min(ssims_cpu), np.max(ssims_cpu)
-    min_esi,  max_esi  = np.min(esis_cpu),  np.max(esis_cpu)
+    min_esi, max_esi = np.min(esis_cpu), np.max(esis_cpu)
 
     # Calculate standard deviation
     std_psnr, std_ssim, std_esi = np.std(psnrs_cpu), np.std(psnrs_cpu), np.std(esis_cpu)
@@ -544,22 +548,22 @@ def calculate_performance_metrics(epoch, best_psnr, psnrs, best_ssim, ssims, bes
     # Check if the average PSNR for this epoch is higher than the best seen so far
     is_psnr_improved = avg_psnr >= best_psnr * (1 + improvement_threshold)
     is_ssim_improved = avg_ssim >= best_ssim * (1 + improvement_threshold)
-    is_esi_improved  = avg_esi  >= best_esi  * (1 + improvement_threshold)
+    is_esi_improved = avg_esi >= best_esi * (1 + improvement_threshold)
 
     # Performance metrics
     performance_metrics = {
         'psnr': {'value': avg_psnr, 'improved': is_psnr_improved, 'magnitude': abs(avg_psnr - best_psnr)},
         'ssim': {'value': avg_ssim, 'improved': is_ssim_improved, 'magnitude': abs(avg_ssim - best_ssim)},
-        'esi':  {'value': avg_esi,  'improved': is_esi_improved,  'magnitude': abs(avg_esi - best_esi)}
+        'esi': {'value': avg_esi, 'improved': is_esi_improved, 'magnitude': abs(avg_esi - best_esi)}
     }
 
     # Logging for each epoch 
     dh_metrics.print_performance_metrics(epoch, num_epochs, epoch_time, loss_weights,
-                            avg_psnr, min_psnr, max_psnr, std_psnr,
-                            avg_ssim, min_ssim, max_ssim, std_ssim,
-                            avg_esi, min_esi, max_esi, std_esi,
-                            avg_combined_score, performance_metrics,                          
-                            gen_loss, loss_components, dis_loss, gen_optim, dis_optim)
+                                         avg_psnr, min_psnr, max_psnr, std_psnr,
+                                         avg_ssim, min_ssim, max_ssim, std_ssim,
+                                         avg_esi, min_esi, max_esi, std_esi,
+                                         avg_combined_score, performance_metrics,
+                                         gen_loss, loss_components, dis_loss, gen_optim, dis_optim)
 
     return performance_metrics, avg_combined_score
 
@@ -592,23 +596,23 @@ def print_gradients(model, message):
 # Training Loop
 ########################################################################################
 def network_training(train_dataloader, val_dataloader, generator, discriminator, gen_optim, dis_optim):
-    #Learning Rate Scheduling
-    gen_scheduler, dis_scheduler = init_schedulers(gen_optim, dis_optim, opt = "plateau")
+    # Learning Rate Scheduling
+    gen_scheduler, dis_scheduler = init_schedulers(gen_optim, dis_optim, opt="plateau")
 
     # Initialize some variables for averaging
-    best_psnr  = -float('inf')
-    best_ssim  = -float('inf')
-    best_esi   = -float('inf')
+    best_psnr = -float('inf')
+    best_ssim = -float('inf')
+    best_esi = -float('inf')
 
-    epochs_no_improve  = 0           # Counter for epochs without improvement
+    epochs_no_improve = 0  # Counter for epochs without improvement
     psnrs, ssims, esis = [], [], []  # Lists to store all PSNR and SSIM values for each epoch
-    epoch_times        = []          # List to store time taken for each epoch
+    epoch_times = []  # List to store time taken for each epoch
 
     # Enable anomaly detection for debugging
     torch.autograd.set_detect_anomaly(True)
 
     # Initialize the gradient scaler for mixed precision training
-    #scaler = GradScaler()
+    # scaler = GradScaler()
 
     # TRAINING LOOP
     for epoch in range(num_epochs):
@@ -616,7 +620,8 @@ def network_training(train_dataloader, val_dataloader, generator, discriminator,
         start_time = time.time()
 
         # Training step
-        gen_loss, loss_components, dis_loss  = train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader)
+        gen_loss, loss_components, dis_loss = train_step(generator, gen_optim, discriminator, dis_optim,
+                                                         train_dataloader)
 
         # Validation step
         validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis, max_grad_norm)
@@ -625,16 +630,16 @@ def network_training(train_dataloader, val_dataloader, generator, discriminator,
         epoch_time = time.time() - start_time
 
         # Store for future analysis
-        epoch_times.append(epoch_time) 
+        epoch_times.append(epoch_time)
 
         # Calculate performance metrics for this epoch
         performance_metrics, avg_combined_score = calculate_performance_metrics(
-            (epoch + 1), best_psnr, psnrs, best_ssim, ssims, best_esi, esis, 
+            (epoch + 1), best_psnr, psnrs, best_ssim, ssims, best_esi, esis,
             epoch_time, gen_loss.item(), loss_components, dis_loss.item(), gen_optim, dis_optim)
 
         # Save model checkpoints at regular intervals and best models
         save_checkpoint = False
-        
+
         # If the average PSNR for this epoch is higher than the best seen so far, update best_psnr
         if performance_metrics['psnr']['improved'] == True:
             best_psnr = performance_metrics['psnr']['value']
@@ -644,25 +649,25 @@ def network_training(train_dataloader, val_dataloader, generator, discriminator,
         if performance_metrics['ssim']['improved'] == True:
             best_ssim = performance_metrics['ssim']['value']
             save_checkpoint = True
-        
+
         # If the average ESI for this epoch is higher than the best seen so far, update best_esi
         if performance_metrics['esi']['improved'] == True:
             best_esi = performance_metrics['esi']['value']
             save_checkpoint = True
-        
+
         # Save model checkpoints at regular intervals and best models
-        if save_checkpoint==True or (epoch + 1) % checkpoint_interval == 0:
+        if save_checkpoint == True or (epoch + 1) % checkpoint_interval == 0:
             save_model(generator, (epoch + 1), loss_weights)
 
         # Early stopping if there's no improvement in the average PSNR, SSIM, or ESI for a certain number of epochs
-        if save_checkpoint==True:
+        if save_checkpoint == True:
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
 
-        #Update loss weights at the end of each epoch
+        # Update loss weights at the end of each epoch
         loss_weights.manage_epoch_weights(epoch + 1)
-        
+
         # Break if there's no improvement for a certain number of epochs
         if epochs_no_improve >= patience:
             print(f"Early stopping at epoch {epoch} due to no improvement.")
@@ -677,11 +682,12 @@ def network_training(train_dataloader, val_dataloader, generator, discriminator,
         ssims.clear()
         esis.clear()
 
-    #save the model
+    # save the model
     save_model(generator, (epoch + 1), loss_weights)
 
     print(f"Average time per epoch: {np.mean(epoch_times):.2f}s")
     print(f"Final Loss Weights:     {loss_weights.weights}")
+
 
 ########################################################################################
 # Main
@@ -697,13 +703,13 @@ if __name__ == "__main__":
 
     # Instantiate the generator and discriminator
     generator, discriminator = instantiate_networks(
-        type        = 'unet_512', 
-        num_downs   = 7, 
-        ngf         = 160, 
-        norm_type   = 'instance',
-        use_dropout = False
+        type='unet_512',
+        num_downs=7,
+        ngf=160,
+        norm_type='instance',
+        use_dropout=False
     )
-    
+
     # Load the model weights if available
     generator = load_model_weights(generator, MODEL_WEIGHTS_PATH)
 
@@ -714,23 +720,3 @@ if __name__ == "__main__":
     network_training(train_dataloader, val_dataloader, generator, discriminator, gen_optim, dis_optim)
 
     print("Done!")
-
-
-# Debugging Tips
-
-
-# Gradient Flows:
-
-# Verify that the gradients are flowing as expected by 
-    # checking if gen_loss.backward() and dis_loss.backward() are effectively updating the model parameters. 
-    # You can print out gradients for some parameters before and after the backward() call to confirm this.
-
-
-# Loss Scale:
-    
-
-# Incorporate Feature Matching Loss:
-# To improve the perceptual quality further, consider adding a feature matching loss, which minimizes the difference between the feature maps of the real and generated images as computed by an intermediate layer of the discriminator.
-
-# Introduce a Focus Mechanism:
-# For tasks such as reconstructing inscriptions, certain regions of the image are more important than others. A spatial transformer network or an attention mechanism could be used to focus the generator on regions of interest.

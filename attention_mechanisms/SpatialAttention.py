@@ -1,7 +1,7 @@
 import torch
-import torch.nn as nn
 
 from torch.nn import Module, Conv2d, Sigmoid
+
 
 class SpatialAttention(Module):
     def __init__(self, kernel_size=7):
@@ -11,13 +11,13 @@ class SpatialAttention(Module):
 
         padding = 3 if kernel_size == 7 else 1
 
-        self.conv1   = Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        self.conv1 = Conv2d(2, 1, kernel_size, padding=padding, bias=False)
         self.sigmoid = Sigmoid()
 
     def forward(self, x):
-        avg_out    = torch.mean(x, dim=1, keepdim=True)
+        avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
-        x          = torch.cat([avg_out, max_out], dim=1)
-        x          = self.conv1(x)
+        x = torch.cat([avg_out, max_out], dim=1)
+        x = self.conv1(x)
 
         return self.sigmoid(x)

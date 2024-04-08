@@ -1,3 +1,21 @@
+# Image files
+######################
+
+/data/Inscriptions/*
+
+/data/inscriptions_dataset/*
+
+/data/displacement_dataset/*
+
+/data/small_training_dataset/*
+/data/medium_training_dataset/*
+/data/large_training_dataset/*
+/data/synthetic_glyph_dataset/*
+
+/trained_models/*
+
+/data/table_dataset/*
+
 # OS generated files #
 ######################
 .DS_Store
@@ -29,19 +47,6 @@ Thumbs.db
 # DeepLearning files
 ######################
 *.h5
-
-# Image files
-######################
-/data/small_training_dataset/*
-/data/medium_training_dataset/*
-/data/large_training_dataset/*
-/data/test_dataset/*
-/data/reconstruction_dataset/*
-
-/data/Inscriptions/*
-/data/inscriptions_dataset/*
-/data/Modelling/*
-/data/-> Archive/*
 
 # Board files
 /runs/*

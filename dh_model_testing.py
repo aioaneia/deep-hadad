@@ -1,4 +1,5 @@
 import sys
+
 sys.path.append('./')
 
 import cv2
@@ -6,37 +7,36 @@ import numpy as np
 import glob
 import os
 
-import matplotlib.pyplot  as plt
+import matplotlib.pyplot as plt
 import torch
 
-from torchvision.transforms import ToPILImage, Compose, Resize, Lambda, ToTensor
+from torchvision.transforms import ToPILImage, Compose, Resize, ToTensor
 
-from PIL         import Image
-from torchvision import datasets
+from PIL import Image
 
 # import the networks
-from core.DHadadGenerator     import DHadadGenerator
-from bkp.PatchGAN            import DHadadDiscriminator
+from models.DHadadGenerator import DHadadGenerator
 
 # Constants
-PROJECT_PATH          = './'
-test_dataset_path     = PROJECT_PATH + "data/test_dataset/"
+PROJECT_PATH = './'
+test_dataset_path = PROJECT_PATH + "data/test_dataset/"
 original_dataset_path = PROJECT_PATH + "data/test_dataset/Org"
 
-IMAGE_EXTENSIONS      = [".png", ".jpg", ".tif"]
+IMAGE_EXTENSIONS = [".png", ".jpg", ".tif"]
 
-MODEL_PATH   = PROJECT_PATH + 'models/'
-MODEL_NAME   = 'dh_depth_model_ep_1_r1.00_p0.60_a0.20_g1.20_d1.00_s0.50.pth'
+MODEL_PATH = PROJECT_PATH + 'trained_models/'
+MODEL_NAME = 'dh_depth_model_ep_12_l0.70_s0.25_a0.05_d0.15_s0.01_g0.01.pth'
 
 transform = Compose([
-  Resize((512, 512)),
-  ToTensor()
+    Resize((512, 512)),
+    ToTensor()
 ])
 
 to_pil = ToPILImage()
 
 # Set the device
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
 
 def load_model(model, model_path):
     """
@@ -63,7 +63,7 @@ def load_dh_generator():
     :return: The generator
     """
     # Constants
-    gen_in_channels  = 1  # grayscale images, 3 for RGB images
+    gen_in_channels = 1  # grayscale images, 3 for RGB images
     gen_out_channels = 1  # to generate grayscale restored images, change as needed
 
     # Instantiate the generator with the specified channel configurations
@@ -78,9 +78,9 @@ def load_zoe():
     repo = "isl-org/ZoeDepth"
 
     # Zoe_N
-    #model_zoe_n = torch.hub.load(repo, "ZoeD_N", pretrained=True)
+    # model_zoe_n = torch.hub.load(repo, "ZoeD_N", pretrained=True)
     # Zoe_K
-    #model_zoe_k = torch.hub.load(repo, "ZoeD_K", pretrained=True)
+    # model_zoe_k = torch.hub.load(repo, "ZoeD_K", pretrained=True)
 
     # Zoe_NK
     model_zoe_nk = torch.hub.load(repo, "ZoeD_NK", pretrained=True)
@@ -88,6 +88,7 @@ def load_zoe():
     zoe = model_zoe_nk.to(device)
 
     return zoe
+
 
 # Get the paths of all images in a directory
 def get_image_paths(directory):
@@ -98,10 +99,11 @@ def get_image_paths(directory):
 
     return sorted(image_paths)
 
+
 # Load the dataset
 def load_dataset(dataset_path):
     # Get images from path
-    image_paths  = get_image_paths(dataset_path)
+    image_paths = get_image_paths(dataset_path)
 
     return image_paths
 
@@ -114,7 +116,7 @@ def predict_depth(zoe_model, image, invert=True):
     :return: The depth image
     """
     # as 16-bit PIL Image
-    prediction = zoe_model.infer_pil(image, output_type="tensor") 
+    prediction = zoe_model.infer_pil(image, output_type="tensor")
 
     # Convert to numpy array and normalize
     depth_np = prediction.cpu().numpy()
@@ -129,6 +131,7 @@ def predict_depth(zoe_model, image, invert=True):
     depth_image = np.uint16(depth_inverted)
 
     return depth_image
+
 
 def generate_restored_image(generator, test_image_tensor, invert_pixel_values=False):
     """
@@ -148,8 +151,8 @@ def generate_restored_image(generator, test_image_tensor, invert_pixel_values=Fa
 
     # Invert the pixel values
     if invert_pixel_values:
-        restored_image = 1 - restored_image 
-    
+        restored_image = 1 - restored_image
+
     return restored_image
 
 
@@ -170,7 +173,7 @@ def generate_restored_images(generator, depth_model, dataset, invert_pixel_value
 
         # Predict the depth
         # as 16-bit PIL Image
-        prediction = depth_model.infer_pil(image_pil, output_type="tensor") 
+        prediction = depth_model.infer_pil(image_pil, output_type="tensor")
 
         # Invert depth values
         prediction = 1 - prediction
@@ -183,12 +186,12 @@ def generate_restored_images(generator, depth_model, dataset, invert_pixel_value
         # Generate the restored image
         restored_image = generate_restored_image(generator, image_tensor, invert_pixel_values)
 
-            # Add the restored image to the list
+        # Add the restored image to the list
         table_images.append({
-            'org_image':    image_pil,
+            'org_image': image_pil,
             'ground_truth': prediction_pil,
-            'est_image':    prediction_pil,
-            'res_label':    to_pil(restored_image)
+            'est_image': prediction_pil,
+            'res_label': to_pil(restored_image)
         })
 
         print("Generated restored image for label: {}".format(image_path))
@@ -209,7 +212,7 @@ def plot_images(table_images, cmap='gray'):
     if num_images == 0:
         print("No images to display.")
         return
-    
+
     # Create the figure and axes
     # The number of columns is 4, one for each image
     # The number of rows is the number of images
@@ -241,6 +244,7 @@ def plot_images(table_images, cmap='gray'):
     plt.tight_layout()
     plt.show()
 
+
 def save_images(table_images):
     """
     Saves the test image and the restored image
@@ -250,14 +254,15 @@ def save_images(table_images):
     """
 
     # Save the images
-    #restored_image_pil.save(PROJECT_PATH + "data/test_dataset/X_image.png")
+    # restored_image_pil.save(PROJECT_PATH + "data/test_dataset/X_image.png")
     pass
+
 
 # Main function for testing
 if __name__ == "__main__":
     # Load the DHadad generator
     generator = load_dh_generator()
-    
+
     # Load the model weights
     load_model(generator, MODEL_PATH + MODEL_NAME)
 

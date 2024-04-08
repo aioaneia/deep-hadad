@@ -25,7 +25,7 @@ from keras.losses       import BinaryCrossentropy, MeanAbsoluteError
 import keras.backend as K
 
 from attention_mechanisms.SelfAttention import SelfAttention
-from core.ResidualBlock                 import ResidualBlock
+from models.ResidualBlock                 import ResidualBlock
 from attention_mechanisms.CBAM          import CBAM
 
 from PIL import Image

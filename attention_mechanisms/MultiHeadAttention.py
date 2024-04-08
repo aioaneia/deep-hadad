@@ -1,10 +1,9 @@
 import math
 
 import torch
-import torch.nn            as nn
-import torch.nn.functional as F
+import torch.nn as nn
+from torch.nn import Module
 
-from torch.nn import InstanceNorm2d, Sigmoid, Conv2d, ReLU, Dropout, Module, AdaptiveAvgPool2d, Sequential, ConvTranspose2d
 
 ####################################################################################################
 # Multi-Head Attention Layer
@@ -15,7 +14,7 @@ from torch.nn import InstanceNorm2d, Sigmoid, Conv2d, ReLU, Dropout, Module, Ada
 class MultiHeadAttention(Module):
     def __init__(self, in_channels, num_heads=8, dropout=0.1):
         super(MultiHeadAttention, self).__init__()
-        
+
         self.num_heads = num_heads
         self.attention_head_size = int(in_channels / num_heads)
         self.all_head_size = self.num_heads * self.attention_head_size
@@ -34,7 +33,6 @@ class MultiHeadAttention(Module):
         return x.permute(0, 2, 1, 3)
 
     def forward(self, hidden_states):
-
         mixed_query_layer = self.query(hidden_states)
         mixed_key_layer = self.key(hidden_states)
         mixed_value_layer = self.value(hidden_states)
@@ -57,17 +55,17 @@ class MultiHeadAttention(Module):
 
         return attention_output
 
-            # # Apply multi-head attention at a suitable position
-            # if idx == 5:  
-            #     #print(f"Before MultiHeadAttention, x shape: {x.shape}")
-                
-            #     # Reshape x for MultiHeadAttention
-            #     batch_size, channels, height, width = x.shape
-            #     # Reshaping to [batch_size, seq_len, feature_dim]
-            #     x = x.view(batch_size, height * width, channels)
+        # # Apply multi-head attention at a suitable position
+        # if idx == 5:
+        #     #print(f"Before MultiHeadAttention, x shape: {x.shape}")
 
-            #     # Apply MultiHeadAttention
-            #     x = self.multi_head_attention(x)
+        #     # Reshape x for MultiHeadAttention
+        #     batch_size, channels, height, width = x.shape
+        #     # Reshaping to [batch_size, seq_len, feature_dim]
+        #     x = x.view(batch_size, height * width, channels)
 
-            #     # Reshape back to original dimensions if needed
-            #     x = x.view(batch_size, channels, height, width)
+        #     # Apply MultiHeadAttention
+        #     x = self.multi_head_attention(x)
+
+        #     # Reshape back to original dimensions if needed
+        #     x = x.view(batch_size, channels, height, width)
