@@ -8,7 +8,6 @@
 /data/displacement_dataset/*
 
 /data/training_dataset/*
-/data/synthetic_glyph_dataset/*
 
 /trained_models/*
 
@@ -48,9 +47,6 @@ Thumbs.db
 
 # Board files
 /runs/*
-
-# Model files
-/models/*
 
 # Python files
 ######################
