@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from PIL.Image import Image
 from scipy.stats import ks_2samp
 
 
@@ -261,6 +262,45 @@ def simulate_discoloration_and_texture(image, discoloration_intensity=0.5, textu
     return image
 
 
+def calculate_mean_and_std(real_image_paths, synthetic_image_paths, common_transforms):
+    # Calculate mean and std for the dataset
+    mean = 0.
+    std = 0.
+
+    # Use a subset to calculate mean and std for efficiency
+    subset_intact_image_paths = real_image_paths[:100]
+    subset_damaged_image_paths = synthetic_image_paths[:100]
+    min_val, max_val = float('inf'), -float('inf')
+
+    for file_path in subset_damaged_image_paths:
+        image = Image.open(file_path)
+        tensor = common_transforms(image)
+
+        min_val = min(min_val, tensor.min().item())
+        max_val = max(max_val, tensor.max().item())
+
+    print(f"Minimum pixel value in the dataset: {min_val}")
+    print(f"Maximum pixel value in the dataset: {max_val}")
+
+    # for images, _ in DataLoader(
+    #         DisplacementMapDataset(subset_intact_image_paths, subset_damaged_image_paths, transform=common_transforms),
+    #         batch_size=batch_size):
+    #     images = images.to(device)  # Move images to GPU
+    #     batch_samples = len(images)  # Use len() to get the number of images in the batch
+    #     images = images.view(batch_samples, images.size(1), -1)
+    #     mean += images.mean(2).sum(0)
+    #     std += images.std(2).sum(0)
+
+    mean /= len(real_image_paths)
+    std /= len(synthetic_image_paths)
+
+    # Now mean and std should be tensors of size 1
+    print(mean.size())  # Should print torch.Size([1])
+    print(std.size())  # Should print torch.Size([1])
+
+    return mean, std
+
+
 ####################################################################################################
 # Validate Intensity Distribution
 ####################################################################################################
@@ -277,4 +317,3 @@ def validate_intensity_distribution(real_images, synthetic_images):
     else:
         print("No significant difference in distributions.")
         return True
-

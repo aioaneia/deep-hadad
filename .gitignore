@@ -7,9 +7,7 @@
 
 /data/displacement_dataset/*
 
-/data/small_training_dataset/*
-/data/medium_training_dataset/*
-/data/large_training_dataset/*
+/data/training_dataset/*
 /data/synthetic_glyph_dataset/*
 
 /trained_models/*
