@@ -15,27 +15,27 @@ def apply_sobel(image):
 
 
 # Sharpen image
-def sharp_image(image):
+def apply_histogram_equalization(displacement_map):
     """
-    Sharpen the image using the unsharp mask method.
+        Apply histogram equalization to improve the visibility of details
     """
+
+    image = (displacement_map * 255).astype(np.uint8)
 
     # Create a sharpening kernel
     transform = A.Compose([
         # Contrast Limited Adaptive Histogram Equalization
-        A.CLAHE(clip_limit=(2.0, 3.0), p=1),
-
-        # Gamma Contrast
-        A.RandomGamma(gamma_limit=(90, 110), p=1),
-
-        # Sharpen the image
-        A.Sharpen(alpha=(0.9, 1), lightness=(1.0, 1.0), p=1),
-
-        # Emboss effect to enhance texture
-        A.Emboss(alpha=(0.4, 0.6), strength=(0.9, 1), p=1),
+        A.CLAHE(clip_limit=3.0, tile_grid_size=(8, 8), p=1),  # Adaptive histogram equalization
     ])
 
     # Enhance the depth map
     augmented_image = transform(image=image)['image']
+
+    augmented_image = cv2.normalize(
+        augmented_image,
+        None,
+        alpha=0, beta=1,
+        norm_type=cv2.NORM_MINMAX,
+        dtype=cv2.CV_32F)
 
     return augmented_image

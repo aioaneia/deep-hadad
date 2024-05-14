@@ -2,24 +2,17 @@ import functools
 import glob
 import logging
 import os
-import sys
 import time
-
 import numpy as np
 import torch
-from PIL import Image
 from sklearn.model_selection import train_test_split
+
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
-from torchvision import transforms
 
-# Add the project directory to the Python path
-sys.path.append('./')
-
-# Import the DeepHadad networks
 from models.DHadadGenerator import DHadadGenerator
 from models.UnetGenerator import UnetGenerator
 from models.PatchGANDiscriminator import build_discriminator as DHadadDiscriminator
@@ -54,7 +47,7 @@ print("PyTorch version: " + torch.__version__)
 # Set hyperparameter values for training 
 generator_lr = 0.0002
 discriminator_lr = 0.0003
-batch_size = 1
+batch_size = 4
 num_epochs = 100
 checkpoint_interval = 3
 max_grad_norm = 1.0
@@ -94,102 +87,52 @@ def get_image_paths(directory):
     return sorted(image_paths)
 
 
-def calculate_mean_and_std(real_image_paths, synthetic_image_paths, common_transforms):
-    # Calculate mean and std for the dataset
-    mean = 0.
-    std = 0.
-
-    # Use a subset to calculate mean and std for efficiency
-    subset_intact_image_paths = real_image_paths[:100]
-    subset_damaged_image_paths = synthetic_image_paths[:100]
-    min_val, max_val = float('inf'), -float('inf')
-
-    for file_path in subset_damaged_image_paths:
-        image = Image.open(file_path)
-        tensor = common_transforms(image)
-
-        min_val = min(min_val, tensor.min().item())
-        max_val = max(max_val, tensor.max().item())
-
-    print(f"Minimum pixel value in the dataset: {min_val}")
-    print(f"Maximum pixel value in the dataset: {max_val}")
-
-    for images, _ in DataLoader(
-            DisplacementMapDataset(subset_intact_image_paths, subset_damaged_image_paths, transform=common_transforms),
-            batch_size=batch_size):
-        images = images.to(device)  # Move images to GPU
-        batch_samples = len(images)  # Use len() to get the number of images in the batch
-        images = images.view(batch_samples, images.size(1), -1)
-        mean += images.mean(2).sum(0)
-        std += images.std(2).sum(0)
-
-    mean /= len(real_image_paths)
-    std /= len(synthetic_image_paths)
-
-    # Now mean and std should be tensors of size 1
-    print(mean.size())  # Should print torch.Size([1])
-    print(std.size())  # Should print torch.Size([1])
-
-    return mean, std
-
-
 def load_dataset(preload_images=False):
     """
     Loads the training dataset
     :return: The dataloaders for both training dataset and validation dataset
     """
+
     # Get images from path
-    intact_image_paths = get_image_paths(X_TRAINING_DATASET_PATH)
-    damaged_image_paths = get_image_paths(Y_TRAINING_DATASET_PATH)
+    input_image_paths = get_image_paths(X_TRAINING_DATASET_PATH)
+    target_image_paths = get_image_paths(Y_TRAINING_DATASET_PATH)
 
     print(f"Path to Intact Images:    {X_TRAINING_DATASET_PATH}")
     print(f"Path to Synhtetic Images: {Y_TRAINING_DATASET_PATH}")
 
-    print(f"Number of Intact Inscriptions:    {len(intact_image_paths)}")
-    print(f"Number of Synhtetic Inscriptions: {len(damaged_image_paths)}")
+    print(f"Number of Input Inscriptions:  {len(input_image_paths)}")
+    print(f"Number of Target Inscriptions: {len(target_image_paths)}")
 
-    assert len(intact_image_paths) == len(damaged_image_paths), "Number of intact and damaged images must be the same"
+    assert len(input_image_paths) == len(target_image_paths), "Number of intact and damaged images must be the same"
 
     # Common Data Augmentation for both Real and Synthetic Images
     # It takes a PIL image as input and returns a tensor
     # Resize to 512x512, convert to grayscale, and convert to tensor
-    common_transforms = transforms.Compose([
-        transforms.Resize((512, 512)),
-        transforms.Lambda(lambda x: x.convert('L')),
-        transforms.ToTensor()
-    ])
+    # common_transforms = transforms.Compose([
+    #     transforms.Resize((512, 512)),
+    #     transforms.Lambda(lambda x: x.convert('L')),
+    #     transforms.ToTensor()
+    # ])
 
     # Calculate mean and std for the dataset
-    mean, std = calculate_mean_and_std(intact_image_paths, damaged_image_paths, common_transforms)
-
-    # Data Augmentation for the Real Images
-    image_transforms = transforms.Compose([
-        transforms.RandomRotation(10),
-        common_transforms,
-        transforms.Normalize(mean=mean.tolist(), std=std.tolist())
-    ])
+    # mean, std = calculate_mean_and_std(input_image_paths, target_image_paths, common_transforms)
+    #
+    # # Data Augmentation for the Real Images
+    # image_transforms = transforms.Compose([
+    #     transforms.RandomRotation(10),
+    #     common_transforms,
+    #     transforms.Normalize(mean=mean.tolist(), std=std.tolist())
+    # ])
 
     # Split the data into training and validation sets
-    # The validation set will be 20% of the entire dataset
-    # The random seed is set to 42 so that the results are reproducible. 
-    # Random seed represents the starting point for the random number generator. If you set it to 1
-    train_real, val_real, train_synthetic, val_synthetic = train_test_split(
-        intact_image_paths, damaged_image_paths, test_size=0.2, shuffle=False, random_state=None)
+    train_input, val_input, train_target, val_target = train_test_split(
+        input_image_paths, target_image_paths, test_size=0.2, shuffle=False, random_state=None)
 
     # Create training and validation datasets and dataloaders
-    train_dataset = DisplacementMapDataset(train_real, train_synthetic, transform=image_transforms,
+    train_dataset = DisplacementMapDataset(train_input, train_target, transform=None,
                                            preload_images=False)
-    val_dataset = DisplacementMapDataset(val_real, val_synthetic, transform=image_transforms, preload_images=False)
+    val_dataset = DisplacementMapDataset(val_input, val_target, transform=None, preload_images=False)
 
-    # Create dataset and dataloader
-    # The dataloader will return a list of [real, synthetic] images for each batch of images
-    # the real images are the ground truth and estimated displacement maps
-    # the synthetic images are the procedurally enhanced displacement maps
-    # the batch size is 1 because we're providing pairs of images as input
-    # the shuffle is set to False because we want to maintain the order of the images
-    # the order of the images is important because we're using the same index to retrieve the images
-    # from the real and synthetic folders
-    # the number of workers is set to 0 because we're using a small dataset
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
@@ -402,22 +345,19 @@ def train_generator_step(generator, gen_optim, fake_dm, real_dm, fake_for_gen, m
     """
         Update Generator Step 
     """
-
     gen_optim.zero_grad()
 
     l1_loss = loss_functions.l1_loss(fake_dm, real_dm)
     adv_loss = loss_functions.adversarial_loss(fake_for_gen, misleading_labels)
     ssim_loss = loss_functions.ssim_loss(fake_dm, real_dm)
-    depth_loss = loss_functions.depth_consistency_loss(fake_dm, real_dm)
     sharp_loss = loss_functions.sharpness_loss(fake_dm, real_dm)
     geom_loss = loss_functions.geometric_consistency_loss(fake_dm, real_dm)
 
     gen_loss = (
-            loss_weights.weights['l1'] * l1_loss + \
-            loss_weights.weights['adversarial'] * adv_loss + \
-            loss_weights.weights['ssim'] * ssim_loss + \
-            loss_weights.weights['depth'] * depth_loss + \
-            loss_weights.weights['geometric'] * geom_loss + \
+            loss_weights.weights['l1'] * l1_loss +
+            loss_weights.weights['ssim'] * ssim_loss +
+            loss_weights.weights['adversarial'] * adv_loss +
+            loss_weights.weights['geometric'] * geom_loss +
             loss_weights.weights['sharp'] * sharp_loss
     )
 
@@ -429,12 +369,7 @@ def train_generator_step(generator, gen_optim, fake_dm, real_dm, fake_for_gen, m
     if not torch.is_tensor(gen_loss) or gen_loss.dim() != 0:
         raise ValueError("Generator loss (gen_loss) is not a scalar. It must be a 0-dimensional tensor.")
 
-    # Backprop
-    # print_gradients(generator, "Generator gradients before backward:")
-
     gen_loss.backward()
-
-    # print_gradients(generator, "Generator gradients after backward:")
 
     # Clip gradients for generator
     clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
@@ -442,16 +377,27 @@ def train_generator_step(generator, gen_optim, fake_dm, real_dm, fake_for_gen, m
     # Optimize
     gen_optim.step()
 
-    return gen_loss, [l1_loss, adv_loss, ssim_loss, depth_loss, sharp_loss, geom_loss]
+    return gen_loss, [l1_loss, ssim_loss, adv_loss, geom_loss, sharp_loss, sharp_loss]
 
 
 def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader):
     """
-    Training step for each batch
+    Training step for the generator and discriminator
+        Training step for each batch
     data is a list of [real, synthetic] images
     real_dms are the ground truth and estimated displacement maps
     synthetic_dms are the procedurally enhanced displacement maps
+
+    :param generator: The generator network
+    :param gen_optim: The generator optimizer
+    :param discriminator: The discriminator network
+    :param dis_optim: The discriminator optimizer
+    :param train_dataset: The training dataset
     """
+
+    # Increment the counter and log every 100 pairs
+    counter = 0
+    start_time = time.time()
 
     generator.train()
     discriminator.train()
@@ -460,6 +406,10 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader)
         # Move images to GPU
         damaged_dm = damaged_dm.to(device)
         enhanced_dm = enhanced_dm.to(device)
+
+        # Print the shapes of the tensors before appending to the dataset
+        print("Input Displacement Map Tensor Shape:", damaged_dm.shape)
+        print("Target Displacement Map Tensor Shape:", enhanced_dm.shape)
 
         # Generate fake data for discriminator training and detach it
         fake_dm = generator(damaged_dm).detach()
@@ -482,6 +432,17 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader)
         for param in discriminator.parameters():
             param.requires_grad = True
 
+        counter += 1
+
+        # Log every 500 pairs
+        if counter % 50 == 0:
+            # print(f"Processed image pair:            {damaged_dm}, {enhanced_dm}")
+            print(f"Number of image pairs processed: {counter}")
+
+            # Calculate the time per image pair and log it with two decimal places
+            time_per_image_pair = (time.time() - start_time) / counter
+            print(f"Time per image pair:             {time_per_image_pair:.2f} seconds")
+
     return gen_loss, loss_components, dis_loss
 
 
@@ -494,22 +455,19 @@ def validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis
     discriminator.eval()
 
     with torch.no_grad():
-        # Clip val gradients
-        # clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
-
-        for real_dm, synthetic_dm in val_dataloader:
-            real_dm = real_dm.to(device)
-            synthetic_dm = synthetic_dm.to(device)
-            enhanced_dm = generator(real_dm)
+        for damaged_dm, preserved_dm in val_dataloader:
+            damaged_dm = damaged_dm.to(device)
+            preserved_dm = preserved_dm.to(device)
+            enhanced_dm = generator(damaged_dm)
 
             # Clamp the values to be between 0 and 1
             enhanced_dm = enhanced_dm.clamp(0, 1)
-            synthetic_dm = synthetic_dm.clamp(0, 1)
+            synthetic_dm = preserved_dm.clamp(0, 1)
 
             # Compute PSNR, SSIM, ESI for the current batch
-            batch_psnr = dh_metrics.compute_psnr(enhanced_dm, synthetic_dm)
-            batch_ssim = dh_metrics.compute_ssim(enhanced_dm, synthetic_dm)
-            batch_esi = dh_metrics.compute_edge_similarity(enhanced_dm, synthetic_dm)
+            batch_psnr = dh_metrics.compute_psnr(enhanced_dm, preserved_dm)
+            batch_ssim = dh_metrics.compute_ssim(enhanced_dm, preserved_dm)
+            batch_esi = dh_metrics.compute_edge_similarity(enhanced_dm, preserved_dm)
 
             # Update epoch metrics
             psnrs.append(batch_psnr)
@@ -595,7 +553,7 @@ def print_gradients(model, message):
 ########################################################################################
 # Training Loop
 ########################################################################################
-def network_training(train_dataloader, val_dataloader, generator, discriminator, gen_optim, dis_optim):
+def network_training(train_dataset, val_dataset, generator, discriminator, gen_optim, dis_optim):
     # Learning Rate Scheduling
     gen_scheduler, dis_scheduler = init_schedulers(gen_optim, dis_optim, opt="plateau")
 
@@ -621,10 +579,10 @@ def network_training(train_dataloader, val_dataloader, generator, discriminator,
 
         # Training step
         gen_loss, loss_components, dis_loss = train_step(generator, gen_optim, discriminator, dis_optim,
-                                                         train_dataloader)
+                                                         train_dataset)
 
         # Validation step
-        validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis, max_grad_norm)
+        validation_step(generator, discriminator, val_dataset, psnrs, ssims, esis, max_grad_norm)
 
         # Calculate time taken for this epoch
         epoch_time = time.time() - start_time
@@ -705,7 +663,7 @@ if __name__ == "__main__":
     generator, discriminator = instantiate_networks(
         type='unet_512',
         num_downs=7,
-        ngf=160,
+        ngf=128,
         norm_type='instance',
         use_dropout=False
     )
