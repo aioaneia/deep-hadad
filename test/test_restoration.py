@@ -15,9 +15,9 @@ print("PyTorch version: " + torch.__version__)
 
 PROJECT_PATH = '../'
 
-LARGE_D_MAP_PATH = PROJECT_PATH + "data/test_dataset/Real Inscriptions/KAI_214_d_map_2.png"
+LARGE_D_MAP_PATH = PROJECT_PATH + "data/test_dataset/Real Damaged Inscriptions/KAI_214_d_map_2.png"
 
-MODEL_PATH = PROJECT_PATH + 'trained_models/dh_depth_model_ep_26_l0.60_s0.60_a0.20_g0.30_s0.10.pth'
+MODEL_PATH = PROJECT_PATH + 'trained_models/dh_depth_model_ep_40_l0.40_s0.80_a0.20_g0.40_s0.15.pth'
 
 transform = Compose([
     ToTensor(),
@@ -109,7 +109,8 @@ def restore_d_map(generator, d_map_tensor, invert_pixel_values=True):
     return restored_image
 
 
-def restore_large_d_map(generator, d_map, crop_size=(512, 512), overlap=(50, 50), invert_pixel_values=True):
+
+def restore_large_displacement_map(generator, d_map, crop_size=(512, 512), overlap=(5, 5), invert_pixel_values=False, test_stitch=False):
     """
     Generates the restored image for a large displacement map by cropping, processing, and stitching patches.
 
@@ -118,6 +119,7 @@ def restore_large_d_map(generator, d_map, crop_size=(512, 512), overlap=(50, 50)
     :param crop_size: Tuple representing the height and width of the patches
     :param overlap: Tuple for height and width overlap between adjacent patches
     :param invert_pixel_values: Boolean to determine whether to invert pixel values
+    :param test_stitch: Boolean to determine whether to stitch patches without reconstruction
     :return: The restored full displacement map
     """
 
@@ -125,7 +127,7 @@ def restore_large_d_map(generator, d_map, crop_size=(512, 512), overlap=(50, 50)
     patch_height, patch_width = crop_size
     overlap_h, overlap_w = overlap
 
-    # Initialize a large zero matrix to hold the restored image
+    # Initialize a large zero matrix to hold the restored image or test stitch image
     restored_d_map = np.zeros((height, width), dtype=np.float32)
     weight_map = np.zeros((height, width), dtype=np.float32)
 
@@ -139,13 +141,6 @@ def restore_large_d_map(generator, d_map, crop_size=(512, 512), overlap=(50, 50)
             # Crop the patch from the large displacement map
             patch = d_map[y:y_end, x:x_end]
 
-            # Pad if the patch isn't exactly the crop size
-            # padded_patch = np.pad(
-            #     patch,
-            #     ((0, max(0, patch_height - patch.shape[0])), (0, max(0, patch_width - patch.shape[1]))),
-            #     mode='constant'
-            # )
-
             # Pad the patch to ensure it has the dimensions of crop_size
             padded_patch = np.pad(
                 patch,
@@ -153,35 +148,31 @@ def restore_large_d_map(generator, d_map, crop_size=(512, 512), overlap=(50, 50)
                 mode='constant', constant_values=0
             )
 
-            # Transform the padded patch to a tensor
-            patch_tensor = transform(padded_patch).unsqueeze(0).to(device)
+            if test_stitch:
+                restored_patch = padded_patch
+            else:
+                # Transform the padded patch to a tensor
+                patch_tensor = transform(padded_patch).unsqueeze(0).to(device)
 
-            # Turn off gradients for testing
-            with torch.no_grad():
-                restored_patch_tensor = generator(patch_tensor).squeeze(0).cpu()
+                # Turn off gradients for testing
+                with torch.no_grad():
+                    restored_patch_tensor = generator(patch_tensor).squeeze(0).cpu()
 
-                # Normalize the output
-                restored_patch = (restored_patch_tensor - restored_patch_tensor.min()) / (
-                        restored_patch_tensor.max() - restored_patch_tensor.min())
+                    # Normalize the output
+                    restored_patch = (restored_patch_tensor - restored_patch_tensor.min()) / (
+                            restored_patch_tensor.max() - restored_patch_tensor.min())
 
-                restored_patch = restored_patch.numpy()
+                    restored_patch = restored_patch.numpy()
 
-            # Invert pixel values if needed
-            if invert_pixel_values:
-                restored_patch = 1 - restored_patch
+                # Invert pixel values if needed
+                if invert_pixel_values:
+                    restored_patch = 1 - restored_patch
 
-            # # Blend the restored patch into the full displacement map using a weight map to handle overlaps
-            # y_slice = slice(y, y_end)
-            # x_slice = slice(x, x_end)
-            #
-            # weight_map[y_slice, x_slice] += 1
-            # restored_d_map[y_slice, x_slice] += restored_patch[:y_end - y, :x_end - x]
+                # Remove extra dimensions explicitly and ensure it matches the slice
+                restored_patch = np.squeeze(restored_patch)
 
-            # Remove extra dimensions explicitly and ensure it matches the slice
-            restored_patch = np.squeeze(restored_patch)
-
-            if restored_patch.ndim != 2:
-                raise ValueError("Patch has incorrect number of dimensions after squeezing.")
+                if restored_patch.ndim != 2:
+                    raise ValueError("Patch has incorrect number of dimensions after squeezing.")
 
             # Reshape the patch to match the expected slice dimensions exactly
             restored_patch = restored_patch[:y_end - y, :x_end - x]
@@ -213,7 +204,14 @@ if __name__ == "__main__":
     # plot_utils.plotly_mesh(d_map_vertices, d_map_faces, title=f"3D Surface Mesh")
 
     # Generate the restored image
-    restored_d_map = restore_large_d_map(generator, d_map)
+    restored_d_map = restore_large_displacement_map(
+        generator,
+        d_map,
+        crop_size=(512, 512),
+        overlap=(5, 5),
+        invert_pixel_values=False,
+        test_stitch=False
+    )
 
     plot_utils.plot_displacement_map(restored_d_map, title=f'Displacement Map', cmap='gray')
 

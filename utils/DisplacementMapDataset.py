@@ -1,6 +1,4 @@
-import cv2
 import time
-import torch
 
 from torch.utils.data import Dataset
 
