@@ -4,49 +4,33 @@ class DHadadLossWeights:
     The initial weights for the loss function
     """
 
-    loss_weights_general_structure = {
+    loss_weights_initial = {
         'l1': 1.00,
-        'ssim': 0.20,
-        'adversarial': 0.10,
-        'geometric': 0.15,
-        'sharp': 0.05,
+        'ssim': 0.50,
+        'lpips': 0.10,
+        'adversarial': 0.05,
+        'geometric': 0.10,
     }
 
-    loss_weights_perceptual = {
+    loss_weights_middle = {
         'l1': 0.80,
         'ssim': 0.40,
-        'adversarial': 0.15,
-        'geometric': 0.20,
-        'sharp': 0.05,
+        'lpips': 0.20,
+        'adversarial': 0.10,
+        'geometric': 0.10
     }
 
-    loss_weights_geometric = {
+    loss_weights_final = {
         'l1': 0.60,
-        'ssim': 0.60,
+        'ssim': 0.30,
+        'lpips': 0.30,
         'adversarial': 0.20,
-        'geometric': 0.30,
-        'sharp': 0.10,
-    }
-
-    loss_weights_realism = {
-        'l1': 0.40,
-        'ssim': 0.80,
-        'adversarial': 0.20,
-        'geometric': 0.40,
-        'sharp': 0.15,
-    }
-
-    loss_weights_realism_2 = {
-        'l1': 0.20,
-        'ssim': 1.00,
-        'adversarial': 0.25,
-        'geometric': 0.50,
-        'sharp': 0.20,
+        'geometric': 0.10
     }
 
     def __init__(self, weights_type='depth', max_weight=0.5, min_weight=0.05, decay_factor=0.95, max_change=0.05):
         if weights_type == 'depth':
-            self.weights = self.loss_weights_general_structure
+            self.weights = self.loss_weights_initial
         else:
             raise ValueError(f"Invalid weights type: {weights_type}")
 
@@ -83,16 +67,12 @@ class DHadadLossWeights:
         :param epoch: Current training epoch.
         """
 
-        if epoch <= 10:
-            self.weights = self.loss_weights_general_structure
-        elif 11 < epoch <= 20:
-            self.weights = self.loss_weights_perceptual
-        elif 21 < epoch <= 30:
-            self.weights = self.loss_weights_geometric
-        elif 31 < epoch <= 40:
-            self.weights = self.loss_weights_realism
+        if epoch < 20:
+            self.weights = self.loss_weights_initial
+        elif 11 < 60:
+            self.weights = self.loss_weights_middle
         else:
-            self.weights = self.loss_weights_realism_2
+            self.weights = self.loss_weights_final
 
         # Log the changes for analysis
         print(f"Epoch {epoch}: Weights -> {self.weights}")

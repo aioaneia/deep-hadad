@@ -14,6 +14,16 @@ def apply_sobel(image):
     return (sobel / np.max(sobel) * 255).astype(np.uint8)
 
 
+def edge_enhancement(image):
+    # Ensure the image is in the range 0-255 and of type uint8 for edge detection
+    image_uint8 = np.uint8(image * 255)
+    edges = cv2.Canny(image_uint8, 100, 200)
+    edges = edges.astype(np.float32) / 255  # Normalize edges back to the range 0-1
+    enhanced_image = cv2.addWeighted(image, 0.8, edges, 0.2, 0)
+
+    return enhanced_image
+
+
 # Sharpen image
 def apply_histogram_equalization(displacement_map):
     """

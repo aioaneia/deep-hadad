@@ -2,49 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Import the SSIM loss function
+from lpips import LPIPS
 from pytorch_msssim import SSIM
-
-
-class EdgeLoss(nn.Module):
-    def __init__(self):
-        super(EdgeLoss, self).__init__()
-        # Define Sobel filter for horizontal and vertical edge detection
-        self.sobel_x = nn.Conv2d(1, 1, kernel_size=3, padding=1, bias=False)
-        self.sobel_y = nn.Conv2d(1, 1, kernel_size=3, padding=1, bias=False)
-
-        # Sobel filter weights for x and y direction
-        sobel_x_weights = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]], dtype=torch.float32).view(1, 1, 3,
-                                                                                                                3)
-        sobel_y_weights = torch.tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]], dtype=torch.float32).view(1, 1, 3,
-                                                                                                                3)
-
-        self.sobel_x.weight = nn.Parameter(sobel_x_weights, requires_grad=False)
-        self.sobel_y.weight = nn.Parameter(sobel_y_weights, requires_grad=False)
-
-    def forward(self, input, target):
-        # Ensure input and target are in correct format
-        if input.dim() != 4 or target.dim() != 4:
-            raise ValueError("Expected input and target to be 4-dimensional BxCxHxW")
-
-        # Convert input and target to torch.FloatTensor
-        input = input.to(torch.float32)
-        target = target.to(torch.float32)
-
-        # Apply Sobel filter to input and target images
-        edge_input_x = self.sobel_x(input)
-        edge_input_y = self.sobel_y(input)
-        edge_target_x = self.sobel_x(target)
-        edge_target_y = self.sobel_y(target)
-
-        # Calculate edge magnitude for input and target
-        edge_input_mag = torch.sqrt(edge_input_x ** 2 + edge_input_y ** 2)
-        edge_target_mag = torch.sqrt(edge_target_x ** 2 + edge_target_y ** 2)
-
-        # Calculate loss as Mean Squared Error between edge magnitudes of input and target
-        loss = F.mse_loss(edge_input_mag, edge_target_mag)
-
-        return loss
 
 
 class GeometricConsistencyLoss(nn.Module):
@@ -77,33 +36,17 @@ class GeometricConsistencyLoss(nn.Module):
         return grad_x, grad_y
 
 
-class SharpnessLoss(nn.Module):
-    """
-        SharpnessLoss 
-    """
-
-    def __init__(self):
-        super(SharpnessLoss, self).__init__()
-
-        self.kernel = torch.tensor([[-1, -1, -1],
-                                    [-1, 9, -1],
-                                    [-1, -1, -1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-
-    def forward(self, input, target):
-        self.kernel = self.kernel.to(input.device)
-        sharp_input = F.conv2d(input, self.kernel, padding=1)
-        sharp_target = F.conv2d(target, self.kernel, padding=1)
-
-        return F.mse_loss(sharp_input, sharp_target)
-
-
 class DHadadLossFunctions:
     """
     Contains the loss functions used in the DHadad model
     """
 
-    @staticmethod
-    def l1_loss(input, target):
+    def __init__(self, device):
+        self.device = device
+
+        self.lpips_alex = LPIPS(net='alex').to(self.device)
+
+    def l1_loss(self, input, target):
         """
         Calculates the L1 loss for a batch of images
 
@@ -111,10 +54,10 @@ class DHadadLossFunctions:
         :param target: The target images
         :return: The L1 loss for the batch
         """
+
         return nn.L1Loss()(input, target)
 
-    @staticmethod
-    def ssim_loss(input, target, data_range=1, size_average=True, channel=1):
+    def ssim_loss(self, input, target, data_range=1, size_average=True, channel=1):
         """
         Calculates the SSIM loss for a batch of images
 
@@ -129,8 +72,25 @@ class DHadadLossFunctions:
 
         return ssim_loss
 
-    @staticmethod
-    def adversarial_loss(predictions, labels):
+    def lpips_loss(self, input, target):
+        """
+        Calculates the LPIPS loss for a batch of images
+
+        :param input: The input images
+        :param target: The target images
+        :return: The LPIPS loss for the batch
+        """
+        input = input.to(self.device)
+        target = target.to(self.device)
+
+        input = (input - input.min()) / (input.max() - input.min() + 1e-8)
+        target = (target - target.min()) / (target.max() - target.min() + 1e-8)
+
+        loss = self.lpips_alex(input, target).mean()
+
+        return loss
+
+    def adversarial_loss(self, predictions, labels):
         """
             Calculates adversarial loss for the generator and discriminator using the binary cross entropy with logits loss function 
             and the predictions and the labels.
@@ -138,8 +98,7 @@ class DHadadLossFunctions:
 
         return F.binary_cross_entropy_with_logits(predictions, labels)
 
-    @staticmethod
-    def geometric_consistency_loss(input, target):
+    def geometric_consistency_loss(self, input, target):
         """
         Calculates the geometric consistency loss for a batch of images
 
@@ -149,44 +108,7 @@ class DHadadLossFunctions:
         """
         return GeometricConsistencyLoss()(input, target)
 
-    @staticmethod
-    def sharpness_loss(input, target):
-        """
-        Calculates the sharpness loss for a batch of images
-        
-        Encourages spatial smoothness in the generated images.
-        This can help in reducing noise and artifacts in the generated images.s.
-
-        :param input: The input images
-        :param target: The target images
-        :return: The sharpness loss for the batch
-        """
-        return SharpnessLoss()(input, target)
-
-    @staticmethod
-    def edge_loss(input, target):
-        """
-        Calculates the edge loss for a batch of images
-        
-        Encourages spatial smoothness in the generated images.
-        This can help in reducing noise and artifacts in the generated images.
-
-        Pros:
-            It's a good loss function for binary classification problems.
-        Cons:
-            It can be detrimental for sharp engravings.
-
-        :param input: The input images
-        :param target: The target images
-        :return: The edge loss for the batch
-        """
-        return EdgeLoss()(input, target)
-
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def compute_gradient_penalty(discriminator, damaged_dm, fake_samples, real_samples, lambda_gp=10.0):
+    def compute_gradient_penalty(self, discriminator, damaged_dm, fake_samples, real_samples, lambda_gp=10.0):
         """
         Calculate the gradient penalty loss, used in WGAN-GP paper https://arxiv.org/abs/1704.00028
         The gradient penalty enforces the Lipschitz constraint for the critic (discriminator).

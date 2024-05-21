@@ -1,5 +1,5 @@
 import functools
-
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -7,17 +7,23 @@ from torchvision.transforms import ToPILImage, Compose, ToTensor
 
 import utils.cv_file_utils as file_utils
 import utils.plot_utils as plot_utils
-import utils.cv_convert_utils as conv_utils
+import utils.cv_enhancement_utils as en
 
 from models.UnetGenerator import UnetGenerator
+
+
+os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
 
 print("PyTorch version: " + torch.__version__)
 
 PROJECT_PATH = '../'
 
-LARGE_D_MAP_PATH = PROJECT_PATH + "data/test_dataset/Real Damaged Inscriptions/KAI_214_d_map_2.png"
+# LARGE_D_MAP_PATH = PROJECT_PATH + "data/test_dataset/Real Damaged Inscriptions/kai_214.jpg"
+# LARGE_D_MAP_PATH = PROJECT_PATH + "data/test_dataset/Real Damaged Inscriptions/dm_hadad_2.tif"
 
-MODEL_PATH = PROJECT_PATH + 'trained_models/dh_depth_model_ep_40_l0.40_s0.80_a0.20_g0.40_s0.15.pth'
+LARGE_D_MAP_PATH = PROJECT_PATH + "data/test_dataset/Synthetic Preserved Patches/patch_46.png"
+
+MODEL_PATH = PROJECT_PATH + 'trained_models/dh_depth_model_ep_39_l0.40_s0.80_a0.20_g0.40_s0.15.pth'
 
 transform = Compose([
     ToTensor(),
@@ -109,8 +115,10 @@ def restore_d_map(generator, d_map_tensor, invert_pixel_values=True):
     return restored_image
 
 
-
-def restore_large_displacement_map(generator, d_map, crop_size=(512, 512), overlap=(5, 5), invert_pixel_values=False, test_stitch=False):
+def restore_large_displacement_map(
+        generator, d_map,
+        crop_size=(512, 512), overlap=(5, 5),
+        invert_pixel_values=False, test_stitch=False):
     """
     Generates the restored image for a large displacement map by cropping, processing, and stitching patches.
 
@@ -147,6 +155,8 @@ def restore_large_displacement_map(generator, d_map, crop_size=(512, 512), overl
                 ((0, patch_height - patch.shape[0]), (0, patch_width - patch.shape[1])),
                 mode='constant', constant_values=0
             )
+
+            padded_patch = file_utils.preprocess_displacement_map(padded_patch, apply_clahe=True)
 
             if test_stitch:
                 restored_patch = padded_patch
@@ -188,32 +198,42 @@ def restore_large_displacement_map(generator, d_map, crop_size=(512, 512), overl
 
 
 if __name__ == "__main__":
-    # Load the DHadad generator
+    # Load the DHadad generator architecture
     generator = load_dh_generator()
 
+    # Load the generator weights
     generator = load_model(generator, MODEL_PATH)
 
     # Load the large displacement map
-    d_map = file_utils.load_displacement_map(LARGE_D_MAP_PATH, preprocess=True)
+    d_map = file_utils.load_displacement_map(LARGE_D_MAP_PATH, preprocess=False)
 
     plot_utils.plot_displacement_map(d_map, title=f'Displacement Map', cmap='gray')  # Other cmaps: 'viridis'
-
-    # Convert the displacement map to a mesh
-    # d_map_vertices, d_map_faces = conv_utils.displacement_map_to_mesh(d_map)
-
-    # plot_utils.plotly_mesh(d_map_vertices, d_map_faces, title=f"3D Surface Mesh")
 
     # Generate the restored image
     restored_d_map = restore_large_displacement_map(
         generator,
         d_map,
-        crop_size=(512, 512),
-        overlap=(5, 5),
+        crop_size=(128, 128),
+        overlap=(50, 50),
         invert_pixel_values=False,
-        test_stitch=False
+        test_stitch=True
     )
 
-    plot_utils.plot_displacement_map(restored_d_map, title=f'Displacement Map', cmap='gray')
+    plot_utils.plot_displacement_map(
+        restored_d_map,
+        title=f'Restored Displacement Map',
+        cmap='gray'  # Other cmaps: 'viridis', 'coolwarm'
+    )
+
+    # Apply Sobel filter to the image
+    sobel_image = en.apply_sobel(d_map.copy())
+
+    # Plot the Sobel image
+    plot_utils.plot_displacement_map(
+        sobel_image,
+        title='Sobel for Restored Displacement Map',
+        cmap='coolwarm'  # Other cmaps: 'viridis', 'coolwarm
+    )
 
     # Convert the restored displacement map to a mesh
     # d_map_vertices, d_map_faces = conv_utils.displacement_map_to_mesh(restored_d_map)

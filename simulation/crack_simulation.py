@@ -51,8 +51,10 @@ def simulate_crack(glyph_depth_map, crack_depth_map, blur_radius=7, noise_stddev
     # Ensure the crack depth is at least a certain ratio of the glyph depth
     modulated_crack = np.maximum(modulated_crack, min_depth_ratio * glyph_depth_map)
 
-    # Apply Gaussian blur to the crack mask edges
-    blurred_crack_mask = cv2.GaussianBlur(crack_mask.astype(np.float32), (blur_radius, blur_radius), 0)
+    # Apply multi-scale Gaussian blur to the crack mask edges
+    scales = [3, 5, 7, 9]
+
+    blurred_crack_mask = multi_scale_blur(crack_mask.astype(np.float32), scales)
 
     # Where there's a crack, subtract the inverted crack depth map from the glyph depth map
     simulated_crack = np.where(
@@ -66,6 +68,14 @@ def simulate_crack(glyph_depth_map, crack_depth_map, blur_radius=7, noise_stddev
 
     return simulated_crack
 
+
+def multi_scale_blur(mask, scales):
+    blurred_mask = np.zeros_like(mask, dtype=np.float32)
+
+    for scale in scales:
+        blurred_mask += cv2.GaussianBlur(mask, (scale, scale), 0)
+
+    return blurred_mask / len(scales)
 
 def simulate_crack_with_poisson_blending(glyph_depth_map, crack_depth_map, blending_factor=0.5):
     """Simulate a crack on a glyph depth map using Poisson blending."""

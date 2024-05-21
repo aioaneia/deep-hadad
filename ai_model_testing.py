@@ -13,12 +13,13 @@ print("PyTorch version: " + torch.__version__)
 
 # Constants
 PROJECT_PATH = './'
-test_dataset_path = PROJECT_PATH + "data/test_dataset/Real Glyphs/"
+test_dataset_path = PROJECT_PATH + "data/test_dataset/Synthetic Damaged Glyphs/"
+# test_dataset_path = PROJECT_PATH + "data/test_dataset/Real Damaged Glyphs/"
 IMAGE_EXTENSIONS = [".png", ".jpg", ".tif"]
 
 MODEL_PATH = PROJECT_PATH + 'trained_models/'
 
-MODEL_NAME = 'dh_depth_model_ep_39_l0.40_s0.80_a0.20_g0.40_s0.15.pth'
+MODEL_NAME = 'dh_depth_model_ep_3_l1.00_s0.50_l0.10_a0.05_g0.10.pth'
 
 transform = Compose([
     ToTensor(),
@@ -87,7 +88,7 @@ def load_dh_generator():
         num_downs=7,
         ngf=128,
         norm_layer=norm_layer,
-        use_dropout=False
+        use_dropout=True
     ).to(device)
 
     generator.apply(generator.initialize_weights)

@@ -64,7 +64,7 @@ class DenseBlock(nn.Module):
     def forward(self, x):
         for layer in self.layer_list:
             new_features = layer(x)
-            x = torch.cat([x, new_features], 1)  # Concatenate output features to input features.
+            x = torch.cat([x, new_features], 1)
         return x
 
 
@@ -200,7 +200,7 @@ class UnetGenerator(nn.Module):
         Parameters:
             input_nc (int)  -- the number of channels in input images
             output_nc (int) -- the number of channels in output images
-            num_downs (int) -- the number of downsamplings in UNet. 
+            num_downs (int) -- the number of downsamplings in UNet.
                 For example, # if |num_downs| == 7, image of size 512x512 will become of size 4x4 # at the bottleneck
             ngf (int)       -- the number of filters in the last conv layer
             norm_layer      -- normalization layer
@@ -211,9 +211,9 @@ class UnetGenerator(nn.Module):
 
         super(UnetGenerator, self).__init__()
 
-        # construct unet structure 
+        # construct unet structure
 
-        # add the innermost layer 
+        # add the innermost layer
         unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer,
                                              innermost=True)
 
@@ -229,7 +229,7 @@ class UnetGenerator(nn.Module):
                                              norm_layer=norm_layer)
         unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
 
-        # add the outermost layer 
+        # add the outermost layer
         self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True,
                                              norm_layer=norm_layer)
 
@@ -275,7 +275,9 @@ class UnetSkipConnectionBlock(nn.Module):
                  innermost=False,
                  norm_layer=nn.InstanceNorm2d,
                  use_dropout=False,
-                 num_residual_blocks=2):
+                 num_residual_blocks=3,
+                 num_dense_layers=5,
+                 growth_rate=32):
         super(UnetSkipConnectionBlock, self).__init__()
 
         self.outermost = outermost
@@ -301,8 +303,8 @@ class UnetSkipConnectionBlock(nn.Module):
         upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
         # Add attention blocks
-        cbam_block_inner = CBAM(inner_nc, kernel_size=7, ratio=8)
-        cbam_block_inner_2 = CBAM(inner_nc * 2, kernel_size=7, ratio=8)
+        # cbam_block_inner = CBAM(inner_nc, kernel_size=7, ratio=8)
+        # cbam_block_outer = CBAM(outer_nc, kernel_size=7, ratio=8)
 
         # Add Squeeze and Excitation blocks
         se_block_inner = SEBlock(inner_nc)
@@ -312,11 +314,12 @@ class UnetSkipConnectionBlock(nn.Module):
         residual_blocks_inner = nn.Sequential(*[ResidualBlock(inner_nc, norm_layer=norm_layer, use_bias=use_bias)
                                                 for _ in range(num_residual_blocks)])
 
-        residual_blocks_inner_2 = nn.Sequential(*[ResidualBlock(inner_nc * 2, norm_layer=norm_layer, use_bias=use_bias)
-                                                for _ in range(num_residual_blocks)])
-
         residual_blocks_outer = nn.Sequential(*[ResidualBlock(outer_nc, norm_layer=norm_layer, use_bias=use_bias)
                                                 for _ in range(num_residual_blocks)])
+
+        # dense_block_inner = DenseBlock(num_layers=num_dense_layers, input_channels=inner_nc, growth_rate=growth_rate)
+        # dense_block_outer = DenseBlock(num_layers=num_dense_layers, input_channels=outer_nc, growth_rate=growth_rate)
+
         if outermost:
             # outermost layer of the network
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1)
@@ -324,12 +327,23 @@ class UnetSkipConnectionBlock(nn.Module):
         elif innermost:
             # innermost layer of the network
             upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
-            model = [downrelu, downconv] + [uprelu, upconv, upnorm]
+            model = [downrelu, downconv] + [residual_blocks_inner, se_block_inner] + [uprelu, upconv, upnorm]
         else:
             # intermediate layer of the network
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
-            down = [downrelu, downconv, downnorm]  # cbam_block_inner, se_block_inner,
-            up = [uprelu, upconv, upnorm]  # cbam_block_outer, se_block_outer,
+
+            down = [
+                downrelu, downconv, downnorm,
+                residual_blocks_inner,
+                se_block_inner
+            ]
+
+            up = [
+                uprelu, upconv, upnorm,
+                residual_blocks_outer,
+                se_block_outer
+            ]
+
             model = down + [submodule] + up
 
             if use_dropout:

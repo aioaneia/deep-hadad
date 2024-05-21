@@ -25,20 +25,13 @@ import utils.performance_metrics as dh_metrics
 # Check if CUDA (GPU) is available
 if torch.cuda.is_available():
     device = torch.device("cuda")
-
     print("CUDA device found.")
-else:
-    device = torch.device("cpu")
-
-    print("No CUDA device found, using CPU.")
-
-# Check if MPS (Multi-Process Service) is available
-if torch.backends.mps.is_available():
+elif torch.backends.mps.is_available():
     device = torch.device("mps")
-
     print("MPS device found.")
 else:
-    print("MPS device not found.")
+    device = torch.device("cpu")
+    print("No CUDA or MPS device found, using CPU.")
 
 # PyTorch version
 print("PyTorch version: " + torch.__version__)
@@ -77,8 +70,8 @@ IMAGE_EXTENSIONS = [".png", ".jpg", ".tif"]
 # Dynamic Loss Weights for adjusting the loss weights during training
 loss_weights = DHadadLossWeights(weights_type=weights_type)
 
-# Loss Functions
-loss_functions = DHadadLossFunctions()
+# Initialize loss functions with the device
+loss_functions = DHadadLossFunctions(device=device)
 
 
 # Get the paths of all images in a directory
@@ -299,19 +292,32 @@ def train_generator_step(generator, gen_optim, fake_dm, real_dm, fake_for_gen, m
     """
     gen_optim.zero_grad()
 
+    # Ensure all losses are scalar
     l1_loss = loss_functions.l1_loss(fake_dm, real_dm)
-    adv_loss = loss_functions.adversarial_loss(fake_for_gen, misleading_labels)
+    assert l1_loss.dim() == 0, "L1 loss should be a scalar"
+
     ssim_loss = loss_functions.ssim_loss(fake_dm, real_dm)
-    sharp_loss = loss_functions.sharpness_loss(fake_dm, real_dm)
+    assert ssim_loss.dim() == 0, "SSIM loss should be a scalar"
+
+    lpips_loss_value = loss_functions.lpips_loss(fake_dm, real_dm)
+    assert lpips_loss_value.dim() == 0, "LPIPS loss should be a scalar"
+
+    adv_loss = loss_functions.adversarial_loss(fake_for_gen, misleading_labels)
+    assert adv_loss.dim() == 0, "Adversarial loss should be a scalar"
+
     geom_loss = loss_functions.geometric_consistency_loss(fake_dm, real_dm)
+    assert geom_loss.dim() == 0, "Geometric consistency loss should be a scalar"
 
     gen_loss = (
             loss_weights.weights['l1'] * l1_loss +
             loss_weights.weights['ssim'] * ssim_loss +
+            loss_weights.weights['lpips'] * lpips_loss_value +
             loss_weights.weights['adversarial'] * adv_loss +
-            loss_weights.weights['geometric'] * geom_loss +
-            loss_weights.weights['sharp'] * sharp_loss
+            loss_weights.weights['geometric'] * geom_loss
     )
+
+    # Ensure total_loss is a scalar
+    assert gen_loss.dim() == 0, "Total generator loss should be a scalar"
 
     # Check if gen_loss is None
     if gen_loss is None:
@@ -329,7 +335,7 @@ def train_generator_step(generator, gen_optim, fake_dm, real_dm, fake_for_gen, m
     # Optimize
     gen_optim.step()
 
-    return gen_loss, [l1_loss, ssim_loss, adv_loss, geom_loss, sharp_loss, sharp_loss]
+    return gen_loss, [l1_loss, ssim_loss, lpips_loss_value, adv_loss, geom_loss]
 
 
 def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader):
@@ -650,7 +656,7 @@ if __name__ == "__main__":
         num_downs=7,
         ngf=128,
         norm_type='instance',
-        use_dropout=False
+        use_dropout=True
     )
 
     # Load the model weights if available
@@ -664,8 +670,8 @@ if __name__ == "__main__":
         generator, discriminator,
         gen_optim, dis_optim,
         num_epochs,
-        current_epoch=27,
-        train_dataset_size=2,
+        current_epoch=0,
+        train_dataset_size=3,
         val_dataset_size=2)
 
     print("Done!")

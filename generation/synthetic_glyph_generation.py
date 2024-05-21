@@ -4,6 +4,7 @@ import simulation.crack_simulation as crack_simulation
 import simulation.elastic_simulation as elastic_simulation
 import simulation.erosion_simulation as erosion_simulation
 import simulation.weathering_simulation as weathering_simulation
+import simulation.augmentation_utils as aug_utils
 
 from utils.SyntheticDataset import SyntheticDataset as SyntheticDataset
 
@@ -56,16 +57,18 @@ class SyntheticDatasetGenerator:
 
             set_index += 1
 
-            # for i in range(1):
-            #     augmented_d_map = aug_utils.augment_preserved_glyph_image(preserved_d_map)
-            #
-            #     aug_data_set = self.generate_pairs_from_d_map(augmented_d_map, size/4, save_dataset, set_index)
-            #
-            #     # Append the generated data to the dataset
-            #     data_sets['input'].extend(aug_data_set['input'])
-            #     data_sets['target'].extend(aug_data_set['target'])
-            #
-            #     set_index += 1
+            # check if the preserved_d_map size is larger than 512x512
+            if preserved_d_map.shape[0] > 512 and preserved_d_map.shape[1] > 512:
+                for i in range(1):
+                    augmented_d_map = aug_utils.augment_preserved_glyph_image(preserved_d_map)
+
+                    aug_data_set = self.generate_pairs_from_d_map(augmented_d_map, size/2, save_dataset, set_index)
+
+                    # Append the generated data to the dataset
+                    data_sets['input'].extend(aug_data_set['input'])
+                    data_sets['target'].extend(aug_data_set['target'])
+
+                set_index += 1
 
         dataset_generator = SyntheticDataset(data_sets['input'], data_sets['target'])
 
@@ -88,9 +91,9 @@ class SyntheticDatasetGenerator:
             input_d_map_pair = syn_damaged_d_map
             target_d_map_pair = d_map
 
-            # resize the displacement maps to 256, 256
-            input_d_map_pair = file_utils.resize_and_pad(input_d_map_pair, (256, 256))
-            target_d_map_pair = file_utils.resize_and_pad(target_d_map_pair, (256, 256))
+            # resize the displacement maps to 512x512
+            input_d_map_pair = file_utils.resize_and_pad(input_d_map_pair, (512, 512))
+            target_d_map_pair = file_utils.resize_and_pad(target_d_map_pair, (512, 512))
 
             input_d_map_pair_tensor = file_utils.transform_displacement_map_to_tensor(input_d_map_pair)
             target_d_map_pair_tensor = file_utils.transform_displacement_map_to_tensor(target_d_map_pair)
@@ -148,13 +151,19 @@ class SyntheticDatasetGenerator:
 
                 syn_cracked_glyph_d_map = crack_simulation.simulate_crack(syn_eroded_d_map, crack_d_map)
 
-                syn_d_maps.append(syn_cracked_glyph_d_map)
+                # ----------------- Apply Elastic Deformation simulation ----------------- #
+                elastic_deformed = elastic_simulation.apply_elastic_transform_2d(
+                    syn_cracked_glyph_d_map,
+                    alpha=150, sigma=10
+                )
+
+                syn_d_maps.append(elastic_deformed)
         # ----------------- End erosion simulation ----------------- #
 
         # ----------------- Apply morphology simulation ----------------- #
         # The number of iterations for top hat transform to
         max_iterations = morphology_iterations
-        min_iterations = 3
+        min_iterations = 4
 
         # iterate backwards from max_iterations to min_iterations
         for i in range(max_iterations, min_iterations, -1):

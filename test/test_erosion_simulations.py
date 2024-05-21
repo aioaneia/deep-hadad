@@ -10,11 +10,24 @@ crack_d_map_dataset_path = '../data/masks_dataset/'
 
 
 def test_erosion_simulation():
-    original_map = file_utils.load_displacement_map(glyph_d_map_path, preprocess=False, resize=False, apply_clahe=False)
+    original_map = file_utils.load_displacement_map(
+        glyph_d_map_path,
+        preprocess=False,
+        resize=False,
+        apply_clahe=False
+    )
 
-    plot_utils.plot_displacement_map(original_map, title='Rel 3D Geometry', cmap='gray')
+    plot_utils.plot_displacement_map(
+        original_map,
+        title='Rel 3D Geometry',
+        cmap='gray'
+    )
 
-    d_map = file_utils.load_displacement_map(glyph_d_map_path, preprocess=True, resize=False)
+    d_map = file_utils.load_displacement_map(
+        glyph_d_map_path,
+        preprocess=True,
+        resize=False
+    )
 
     max_iterations = 5
 

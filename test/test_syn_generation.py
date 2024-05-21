@@ -38,10 +38,10 @@ def test_synthetic_generation():
         input_training_dataset_path,
         target_training_dataset_path)
 
-    # dataset = generator.generate_synthetic_input_target_pairs(size=300, save_dataset=True)
+    dataset = generator.generate_synthetic_input_target_pairs(size=200, save_dataset=True)
 
     # Generate synthetic displacement maps
-    dataset = generator.generate_pairs_from_d_map(glyph_d_map, limit=1000, save_dataset=True, set_index=1)
+    # dataset = generator.generate_pairs_from_d_map(glyph_d_map, limit=1000, save_dataset=True, set_index=1)
 
     # Plot a cluster of input synthetic displacement maps (damaged displacement maps)
     plot_displacement_map_cluster(dataset['input'], title='Generated Input Displacement Maps', cmap='gray')

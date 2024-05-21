@@ -1,11 +1,12 @@
-import albumentations as A
 import cv2
+import numpy as np
+import albumentations as A
 
 shared_augmentation_pipeline = A.Compose([
     A.Rotate(limit=20, p=0.5),  # Moderate rotation
     A.RandomScale(scale_limit=0.1, p=0.5),  # Slight scaling to simulate distance variations
     # A.PadIfNeeded(min_height=512, min_width=512, always_apply=True, border_mode=cv2.BORDER_CONSTANT, value=0),
-    # A.RandomCrop(height=512, width=512, always_apply=True),
+    A.RandomCrop(height=256, width=256, always_apply=True),
     A.Perspective(scale=(0.05, 0.1), p=0.5),  # Moderate perspective transformations
     A.ElasticTransform(alpha=1, sigma=50, alpha_affine=50, p=0.2),  # Subtle elastic transformations
 ])
@@ -34,3 +35,30 @@ def augment_image(image, pipeline):
 
 def augment_preserved_glyph_image(image):
     return augment_image(image, pipeline=shared_augmentation_pipeline)
+
+
+def add_speckle_noise(image, stddev=0.1):
+    noise = np.random.randn(*image.shape) * stddev
+    noisy_image = image + image * noise
+
+    return noisy_image
+
+
+def add_gaussian_blur(image, kernel_size=7):
+    """
+    Apply Gaussian blur to the image.
+    """
+    blurred_image = cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
+
+    return blurred_image
+
+
+def add_motion_blur(image, kernel_size=5):
+    # Create a horizontal motion blur kernel
+    kernel = np.zeros((kernel_size, kernel_size))
+    kernel[int((kernel_size - 1) / 2), :] = np.ones(kernel_size)
+    kernel = kernel / kernel_size
+
+    blurred_image = cv2.filter2D(image, -1, kernel)
+
+    return blurred_image
