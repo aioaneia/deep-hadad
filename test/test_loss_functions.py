@@ -12,28 +12,28 @@ class TestLossFunctions(unittest.TestCase):
         self.zero_target = torch.zeros_like(self.input)
 
     def test_l1_loss_identical(self):
-        loss = LossFunctions.DHadadLossFunctions.l1_loss(self.input, self.input)
+        loss = LossFunctions.DHadadLossFunctions.l1_loss(self.input)
         self.assertAlmostEqual(loss.item(), 0, delta=self.epsilon, msg="L1 Loss should be zero for identical inputs")
 
     def test_l1_loss_zeros(self):
-        loss = LossFunctions.DHadadLossFunctions.l1_loss(self.input, self.zero_target)
+        loss = LossFunctions.DHadadLossFunctions.l1_loss(self.zero_target)
         expected_loss = self.input.mean().item()  # Mean of absolute differences (input and zero)
         self.assertAlmostEqual(loss.item(), expected_loss, delta=self.epsilon, msg="L1 Loss fails with zero target")
 
     def test_l1_loss_non_identical(self):
-        loss = LossFunctions.DHadadLossFunctions.l1_loss(self.input, self.target)
+        loss = LossFunctions.DHadadLossFunctions.l1_loss(self.target)
         manual_loss = torch.abs(self.input - self.target).mean().item()
         self.assertAlmostEqual(loss.item(), manual_loss, delta=self.epsilon,
                                msg="L1 Loss calculation does not match manual calculation")
 
     def test_l1_loss_negative_case(self):
         negative_input = -self.input  # Creating a negative case
-        loss = LossFunctions.DHadadLossFunctions.l1_loss(negative_input, self.zero_target)
+        loss = LossFunctions.DHadadLossFunctions.l1_loss(self.zero_target)
         expected_loss = negative_input.abs().mean().item()
         self.assertAlmostEqual(loss.item(), expected_loss, delta=self.epsilon, msg="L1 Loss fails with negative inputs")
 
     def test_ssim_loss(self):
-        loss = LossFunctions.DHadadLossFunctions.ssim_loss(self.input, self.input)
+        loss = LossFunctions.DHadadLossFunctions.ssim_loss(self.input)
 
         self.assertAlmostEqual(loss.item(), 0, delta=self.epsilon)
 

@@ -5,7 +5,7 @@ import utils.plot_utils as plot_utils
 import simulation.erosion_simulation as erosion_simulation
 
 
-glyph_d_map_path = '../data/test_dataset/Real Glyphs/test_3.png'
+glyph_d_map_path         = '../data/test_dataset/Real Glyphs/test_1.png'
 crack_d_map_dataset_path = '../data/masks_dataset/'
 
 
@@ -41,7 +41,7 @@ def test_erosion_simulation():
 
         # Plot the eroded displacement map
         plot_utils.plot_displacement_map(syn_eroded_d_map, title='Eroded Displacement Map', cmap='gray')
-        plot_utils.plot_displacement_map_geometry_in_3d(syn_eroded_d_map, title='Eroded 3D Geometry')
+        # plot_utils.plot_displacement_map_geometry_in_3d(syn_eroded_d_map, title='Eroded 3D Geometry')
 
     assert True
 
@@ -71,7 +71,7 @@ def test_top_hat_transform():
 
 
 if __name__ == "__main__":
-    #test_erosion_simulation()
+    test_erosion_simulation()
 
-    test_top_hat_transform()
+    # test_top_hat_transform()
 

@@ -317,7 +317,7 @@ def train_discriminator_step(discriminator, dis_optim, damaged_dm, enhanced_dm, 
         fake_labels = torch.zeros_like(output_fake, device=device)
 
         # Compute gradient penalty
-        gradient_penalty = loss_functions.compute_gradient_penalty(discriminator, damaged_dm, fake_dm,
+        gradient_penalty = compute_gradient_penalty(discriminator, damaged_dm, fake_dm,
                                                                    enhanced_dm) * lambda_gp
 
         # Compute the total discriminator loss

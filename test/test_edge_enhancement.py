@@ -1,8 +1,7 @@
 
 import cv2
-import numpy as np
 
-import utils.cv_enhancement_utils as en
+import simulation.image_enhancement as en
 import utils.cv_file_utils as file_utils
 import utils.plot_utils as plot_utils
 import utils.cv_convert_utils as conv_utils
@@ -11,11 +10,11 @@ glyph_d_map_path = '../data/test_dataset/Results/test_1.png'
 crack_d_map_path = '../data/masks_dataset/KAI_x_fracture_1.png'
 texture_img = cv2.imread('../data/texture images/KAI_214_texture_4.png')
 
-glyph_d_map = file_utils.load_displacement_map(glyph_d_map_path)
-glyph_point_cloud = conv_utils.displacement_map_to_point_cloud(glyph_d_map)
+glyph_d_map                 = file_utils.load_displacement_map(glyph_d_map_path)
+glyph_point_cloud           = conv_utils.displacement_map_to_point_cloud(glyph_d_map)
 glyph_vertices, glyph_faces = conv_utils.displacement_map_to_mesh(glyph_d_map)
 
-crack_d_map = file_utils.load_displacement_map(crack_d_map_path)
+crack_d_map                 = file_utils.load_displacement_map(crack_d_map_path)
 
 # Sharpen the image and add it to the list
 enhanced_image = en.apply_histogram_equalization(glyph_d_map.copy())

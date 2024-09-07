@@ -1,13 +1,39 @@
 
 import cv2
 import numpy as np
+from PIL import Image
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 
-PLOTS_PATH = '../plots/'
+
+PLOTS_PATH = '../data/plots/'
 
 
-def plot_displacement_map(displacement_map, title="Displacement Map", cmap='coolwarm'):
+def apply_viridis_colormap(displacement_map, title="Displacement Map", save_image=False):
+    """
+    Apply Viridis colormap to a displacement map and save it as an image.
+    """
+    # Apply the Viridis colormap
+    colormap = plt.get_cmap('viridis')
+    colored_map = colormap(displacement_map)
+
+    # Convert the colormap to an image
+    colored_image = (colored_map[:, :, :3] * 255).astype(np.uint8)
+
+    # Convert to PIL Image
+    image = Image.fromarray(colored_image)
+
+    if save_image:
+        image.save(f'{PLOTS_PATH}{title}.png', format='PNG')
+
+    return image
+
+
+def plot_displacement_map(
+        displacement_map,
+        title="Displacement Map",
+        cmap='viridis',
+        save_plot=False):
     """
     Plot a displacement map as a heatmap.
     """
@@ -19,7 +45,8 @@ def plot_displacement_map(displacement_map, title="Displacement Map", cmap='cool
     plt.title(title)
     plt.axis('off')  # Hide axis for clarity in the article
 
-    plt.savefig(f'{PLOTS_PATH}{title}.png', bbox_inches='tight')
+    if save_plot:
+        plt.savefig(f'{PLOTS_PATH}{title}.png', bbox_inches='tight')
 
     plt.show()
 
@@ -287,7 +314,7 @@ def plotly_point_cloud(vertices, title="Point Cloud of G", cmap='gray'):
         mode='markers',
         marker=dict(
             size=2,
-            color=vertices[:, 2],  # set color to the Z coordinate
+            color=vertices[:, 2],
             colorscale=cmap,
             opacity=0.8
         )
@@ -298,7 +325,8 @@ def plotly_point_cloud(vertices, title="Point Cloud of G", cmap='gray'):
         scene=dict(
             xaxis_title='X Coordinate',
             yaxis_title='Y Coordinate',
-            zaxis_title='Elevation'
+            zaxis_title='Elevation',
+            aspectmode='data'
         )
     )
 

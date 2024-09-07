@@ -118,14 +118,15 @@ def print_performance_metrics(epoch, num_epochs, epoch_time, loss_weights,
     print(f" Epoch Average SSIM:       {avg_ssim:.4f} (Min: {min_ssim:.4f}, Max: {max_ssim:.4f}, Std: {std_ssim:.4f})")
     print(f" Epoch Average ESI:        {avg_esi:.4f}  (Min: {min_esi:.4f},  Max: {max_esi:.4f},  Std: {std_esi:.4f})")
     print(f" Epoch Combined Score:     {avg_combined_score:.4f}")
-    print(f" Epoch Loss Weights:       {loss_weights.weights}")
+    print(f" Epoch Loss Weights:       {loss_weights.current_weights}")
     print(f" Epoch Generator Loss:     {gen_loss:.4f}")
-    print(f" Epoch L1 Loss:            {loss_components[0].item():.4f}")
-    print(f" Epoch SSIM Loss:          {loss_components[1].item():.4f}")
-    print(f" Epoch LPIPS Loss:         {loss_components[2].item():.4f}")
-    print(f" Epoch Adv Loss:           {loss_components[3].item():.4f}")
-    print(f" Eposh Geom Loss:          {loss_components[4].item():.4f}")
     print(f" Epoch Discriminator Loss: {dis_loss:.4f}")
+
+    # Safely extract values from loss components
+    # Print individual loss components
+    for loss_name, loss_value in loss_components.items():
+        print(f" Epoch {loss_name} Loss:      {loss_value:.4f}")
+
     print(f" Epoch Generator LR:       {gen_optim.param_groups[0]['lr']:.6f}")
     print(f" Epoch Discriminator LR:   {dis_optim.param_groups[0]['lr']:.6f}")
     print(f" Epoch Performance:        {performance_metrics}")

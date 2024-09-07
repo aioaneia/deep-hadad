@@ -21,7 +21,6 @@ def simulate_cv2_erosion(glyph, kernel_size_range=(3, 14), intensity=1.0, iterat
     :param iterations: The number of erosion iterations to apply to the glyph.
     :return: The eroded glyph.
     """
-
     # Ensure the image is in grayscale
     if len(glyph.shape) > 2:
         glyph = cv2.cvtColor(glyph, cv2.COLOR_BGR2GRAY)
@@ -35,6 +34,16 @@ def simulate_cv2_erosion(glyph, kernel_size_range=(3, 14), intensity=1.0, iterat
     # Determine kernel size based on intensity
     kernel_size = np.random.randint(*kernel_size_range)
     kernel_size = int(kernel_size * intensity)
+
+    # Ensure kernel size is a positive odd integer
+    kernel_size = max(1, kernel_size | 1)  # This ensures kernel_size is odd
+
+    # Create a non-uniform erosion mask
+    erosion_mask = np.random.rand(*glyph.shape) * intensity
+    erosion_mask = cv2.GaussianBlur(erosion_mask, (kernel_size, kernel_size), 0)
+
+    # Apply non-uniform erosion
+    eroded = np.zeros_like(glyph, dtype=np.float32)
 
     # Define erosion kernel as an elliptical structuring element with the specified kernel size
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
@@ -82,16 +91,16 @@ def top_hat_transform(glyph, kernel_size_range=(3, 14), intensity=1.0, iteration
     return top_hat
 
 
-def measure_glyph_elevation_difference(glyph_depth_map, glyph_mask):
-    """
-    Measure the elevation difference between the glyph and its surroundings.
-    """
-
-    glyph_elevation = np.mean(glyph_depth_map[glyph_mask])
-    surroundings_elevation = np.mean(glyph_depth_map[~glyph_mask])
-    elevation_difference = glyph_elevation - surroundings_elevation
-
-    return elevation_difference
+# def measure_glyph_elevation_difference(glyph_depth_map, glyph_mask):
+#     """
+#     Measure the elevation difference between the glyph and its surroundings.
+#     """
+#
+#     glyph_elevation = np.mean(glyph_depth_map[glyph_mask])
+#     surroundings_elevation = np.mean(glyph_depth_map[~glyph_mask])
+#     elevation_difference = glyph_elevation - surroundings_elevation
+#
+#     return elevation_difference
 
 
 ####################################################################################################
@@ -100,15 +109,15 @@ def measure_glyph_elevation_difference(glyph_depth_map, glyph_mask):
 # - Crack simulation
 # - Missing parts simulation
 ####################################################################################################
-def simulate_gaussian_erosion_in_point_cloud(point_cloud, erosion_iterations=10, smoothing_sigma=1.0):
-    """
-    Simulate erosion of a point cloud using Gaussian smoothing.
-    """
-
-    eroded_point_cloud = point_cloud.copy()
-
-    for _ in range(erosion_iterations):
-        eroded_point_cloud[:, 2] = gaussian_filter(eroded_point_cloud[:, 2], sigma=smoothing_sigma)
-
-    return eroded_point_cloud
+# def simulate_gaussian_erosion_in_point_cloud(point_cloud, erosion_iterations=10, smoothing_sigma=1.0):
+#     """
+#     Simulate erosion of a point cloud using Gaussian smoothing.
+#     """
+#
+#     eroded_point_cloud = point_cloud.copy()
+#
+#     for _ in range(erosion_iterations):
+#         eroded_point_cloud[:, 2] = gaussian_filter(eroded_point_cloud[:, 2], sigma=smoothing_sigma)
+#
+#     return eroded_point_cloud
 

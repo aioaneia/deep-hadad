@@ -1,20 +1,15 @@
 
 import torch.nn as nn
 
-from torch.nn import InstanceNorm2d, Sigmoid, Conv2d, ReLU, AdaptiveAvgPool2d, Sequential, ConvTranspose2d, LeakyReLU, \
+from torch.nn import InstanceNorm2d, Sigmoid, Conv2d, Sequential, ConvTranspose2d, LeakyReLU, \
     Linear, Dropout
 from torch.nn.utils.spectral_norm import spectral_norm
-from torch.nn.init import kaiming_normal_, xavier_normal_, orthogonal_
+from torch.nn.init import kaiming_normal_, xavier_normal_
 
 
 def initialize_weights(m):
-    if isinstance(m, Conv2d) or isinstance(m, ConvTranspose2d):
-        kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
-
-        if m.bias is not None:
-            nn.init.constant_(m.bias, 0)
-    elif isinstance(m, Linear):
-        xavier_normal_(m.weight)
+    if isinstance(m, Conv2d):
+        nn.init.normal_(m.weight, 0, 0.02)
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
 
@@ -95,13 +90,16 @@ def build_discriminator(
 
     # Sixth layer with instance normalization
     layers.append(conv_block(filter_sizes[4], filter_sizes[5], stride=2))
+
     if use_se_block:
         layers.append(SEBlock(filter_sizes[5]))
+
     if use_dropout:
         layers.append(Dropout(0.2))
 
     # Seventh layer with instance normalization
     layers.append(conv_block(filter_sizes[5], filter_sizes[6], stride=1))
+
     if use_dropout:
         layers.append(Dropout(0.2))
 

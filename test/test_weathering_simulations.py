@@ -5,7 +5,7 @@ import utils.plot_utils as plot_utils
 
 project_path = '../'
 dataset_size = 'small'
-glyph_d_map_path = '../data/test_dataset/Real Glyphs/test_3.png'
+glyph_d_map_path = '../data/test_dataset/Real Glyphs/test_1.png'
 crack_d_map_dataset_path = '../data/masks_dataset/'
 
 
@@ -22,28 +22,6 @@ def test_surface_roughness():
     plot_utils.plot_displacement_map(rough_d_map, title='Rough Displacement Map')
     # plot_utils.plot_heatmap_from_displacement_map(rough_d_map, title='Rough Heatmap')
     plot_utils.plot_displacement_map_geometry_in_3d(rough_d_map, title='Rough 3D Geometry')
-
-    assert True
-
-
-def test_weathering_simulation():
-    # Load a well-preserved glyph displacement map
-    d_map = file_utils.load_displacement_map(glyph_d_map_path)
-
-    plot_utils.plot_displacement_map(d_map, title='Well Preserved Displacement Map')
-
-    # Simulate weathering of the glyph displacement map
-    syn_weathered_d_map = weathering_simulation.simulate_erosion_weathering(
-        d_map,
-        erosion_size=20,
-        weathering_intensity=0.5,
-        curvature_threshold=10
-    )
-
-    # Plot the weathered displacement map
-    plot_utils.plot_displacement_map(syn_weathered_d_map, title='Weathered Displacement Map')
-    # plot_utils.plot_heatmap_from_displacement_map(syn_weathered_d_map, title='Weathered Heatmap')
-    plot_utils.plot_displacement_map_geometry_in_3d(syn_weathered_d_map, title='Weathered 3D Geometry')
 
     assert True
 
@@ -89,11 +67,78 @@ def test_simulate_thermal_erosion():
     assert True
 
 
+def test_patina_formation():
+    # Load a well-preserved glyph displacement map
+    d_map = file_utils.load_displacement_map(glyph_d_map_path)
+
+    plot_utils.plot_displacement_map(d_map, title='Well Preserved Displacement Map')
+    plot_utils.plot_displacement_map_geometry_in_3d(d_map, title='Weathered 3D Geometry')
+
+    syn_weathered_d_map = weathering_simulation.patina_formation(
+        d_map,
+        thickness=0.7,
+        coverage=0.7
+    )
+
+    # Plot the weathered displacement map
+    plot_utils.plot_displacement_map(syn_weathered_d_map, title='Weathered Displacement Map')
+    # plot_utils.plot_heatmap_from_displacement_map(syn_weathered_d_map, title='Weathered Heatmap')
+    plot_utils.plot_displacement_map_geometry_in_3d(syn_weathered_d_map, title='Weathered 3D Geometry')
+
+    assert True
+
+
+def test_biological_growth():
+    # Load a well-preserved glyph displacement map
+    d_map = file_utils.load_displacement_map(glyph_d_map_path)
+
+    plot_utils.plot_displacement_map(d_map, title='Well Preserved Displacement Map')
+    plot_utils.plot_displacement_map_geometry_in_3d(d_map, title='Weathered 3D Geometry')
+
+    syn_weathered_d_map = weathering_simulation.biological_growth(
+        d_map,
+        coverage=0.1,
+        thickness=1.0
+    )
+
+    # Plot the weathered displacement map
+    plot_utils.plot_displacement_map(syn_weathered_d_map, title='Weathered Displacement Map')
+    # plot_utils.plot_heatmap_from_displacement_map(syn_weathered_d_map, title='Weathered Heatmap')
+    plot_utils.plot_displacement_map_geometry_in_3d(syn_weathered_d_map, title='Weathered 3D Geometry')
+
+    assert True
+
+
+def water_erosion_channels():
+    # Load a well-preserved glyph displacement map
+    d_map = file_utils.load_displacement_map(glyph_d_map_path)
+
+    plot_utils.plot_displacement_map(d_map, title='Well Preserved Displacement Map')
+    plot_utils.plot_displacement_map_geometry_in_3d(d_map, title='Weathered 3D Geometry')
+
+    syn_weathered_d_map = weathering_simulation.water_erosion_channels(
+        d_map,
+        num_channels=5,
+        depth=0.5
+    )
+
+    # Plot the weathered displacement map
+    plot_utils.plot_displacement_map(syn_weathered_d_map, title='Weathered Displacement Map')
+    # plot_utils.plot_heatmap_from_displacement_map(syn_weathered_d_map, title='Weathered Heatmap')
+    plot_utils.plot_displacement_map_geometry_in_3d(syn_weathered_d_map, title='Weathered 3D Geometry')
+
+    assert True
+
+
+
 if __name__ == "__main__":
+
+    water_erosion_channels()
+
     # test_surface_roughness()
 
     # test_weathering_simulation()
 
     # test_simulate_hydraulic_erosion(iterations=200)
 
-    test_simulate_thermal_erosion()
+    # test_simulate_thermal_erosion()

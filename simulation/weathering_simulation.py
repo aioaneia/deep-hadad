@@ -8,13 +8,6 @@ from noise import pnoise2
 def surface_roughness(displacement_map, scale=0.1, octaves=4, persistence=0.5, lacunarity=2.0):
     """
     Generate surface roughness on the displacement map using Perlin noise.
-
-    :param displacement_map: 2D numpy array of the displacement values.
-    :param scale: Scale factor for the Perlin noise.
-    :param octaves: Number of octaves for the noise generation.
-    :param persistence: Persistence factor for noise calculation.
-    :param lacunarity: Lacunarity factor for noise calculation.
-    :return: Modified displacement map with added roughness.
     """
     noise_map = np.zeros_like(displacement_map, dtype=np.float32)
 
@@ -38,12 +31,6 @@ def surface_roughness(displacement_map, scale=0.1, octaves=4, persistence=0.5, l
 def simulate_erosion_weathering(displacement_map, erosion_size=5, weathering_intensity=0.1, curvature_threshold=10):
     """
     Simulate erosion and weathering effects on the displacement map.
-
-    :param displacement_map: 2D numpy array of the displacement values.
-    :param erosion_size: Size of the erosion kernel.
-    :param weathering_intensity: Intensity factor for weathering effects.
-    :param curvature_threshold: Threshold for detecting high-curvature regions.
-    :return: Modified displacement map with erosion and weathering effects.
     """
 
     # Convert displacement_map to float32 for consistent processing
@@ -68,41 +55,6 @@ def simulate_erosion_weathering(displacement_map, erosion_size=5, weathering_int
 
     # Apply Gaussian blur to simulate surface changes due to weathering and erosion
     blurred_map = cv2.GaussianBlur(intensified_weathering_map, (7, 7), 0)
-
-    return blurred_map
-
-
-def simulate_erosion_weathering_with_canny(displacement_map, erosion_size=5, weathering_intensity=0.1,
-                                           canny_threshold1=100, canny_threshold2=200):
-    """
-    Simulate erosion and weathering effects on the displacement map using Canny edge detection.
-
-    :param displacement_map: 2D numpy array of the displacement values.
-    :param erosion_size: Size of the erosion kernel.
-    :param weathering_intensity: Intensity factor for weathering effects.
-    :param canny_threshold1: Lower threshold for the hysteresis procedure in Canny.
-    :param canny_threshold2: Upper threshold for the hysteresis procedure in Canny.
-    :return: Modified displacement map with erosion and weathering effects.
-    """
-    # Applying erosion to simulate basic weathering
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erosion_size, erosion_size))
-    eroded_map = cv2.erode(displacement_map, kernel, iterations=1)
-
-    # Convert the image to 8-bit
-    eroded_map_8bit = cv2.convertScaleAbs(eroded_map)
-
-    # Apply Canny edge detection
-    edges = cv2.Canny(eroded_map_8bit, canny_threshold1, canny_threshold2)
-
-    # Use edges to intensify weathering
-    edges_dilated = cv2.dilate(edges, kernel, iterations=1)
-    weathering_mask = np.where(edges_dilated > 0, 1 - weathering_intensity, 1).astype(np.float32)
-
-    weathered_map = eroded_map * weathering_mask
-    weathered_map = np.clip(weathered_map, 0, np.max(displacement_map))
-
-    # Apply Gaussian blur to simulate natural erosion and blending of weathered areas
-    blurred_map = cv2.GaussianBlur(weathered_map, (7, 7), 0)
 
     return blurred_map
 
@@ -136,69 +88,64 @@ def simulate_hydraulic_erosion(displacement_map, iterations=50, erosion_strength
     return np.clip(displacement_map, 0, np.max(displacement_map))
 
 
-def simulate_thermal_erosion(displacement_map, iterations=30, crack_threshold=0.05):
-    """
-    Simplified simulation of thermal erosion.
-    """
-    eroded_displacement_map = displacement_map.copy()
+def layer_separation_simulation(displacement_map, num_layers=3, separation_probability=0.2):
+    # Convert to float32 for processing
+    result = displacement_map.astype(np.float32)
 
-    for _ in range(iterations):
-        # Identify potential crack areas (simplified as high gradient areas)
-        gradient_magnitude = np.max(np.abs(np.gradient(eroded_displacement_map.astype(float))), axis=0)
-        crack_areas = gradient_magnitude > crack_threshold
+    original_max = np.max(result)
+    original_min = np.min(result)
 
-        # Simulate crack formation by increasing the displacement values
-        eroded_displacement_map[crack_areas] += crack_threshold
+    # Normalize to [0, 1] range
+    result = (result - original_min) / (original_max - original_min)
 
-    # Normalize the eroded displacement map to the range [0, 1]
-    eroded_displacement_map = cv2.normalize(
-        eroded_displacement_map, None,
-        alpha=0, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
+    for _ in range(num_layers):
+        mask = np.random.rand(*displacement_map.shape) < separation_probability
+        depth = np.random.uniform(0.2, 0.8)
+        result[mask] *= depth
 
-    return eroded_displacement_map
+    # Smooth the edges of separated layers
+    result = cv2.GaussianBlur(result, (5, 5), 0)
+
+    # Scale back to original range
+    result = result * (original_max - original_min) + original_min
+
+    # Clip to ensure we're within the original range
+    result = np.clip(result, original_min, original_max)
+
+    # Convert back to original dtype
+    if displacement_map.dtype == np.uint8:
+        result = result.round().astype(np.uint8)
+
+    return result
 
 
-def simulate_thermal_erosion_2(
-        displacement_map,
-        iterations=30,
-        crack_threshold=0.05,
-        smoothing_iterations=5,
-        smoothing_kernel_size=(5, 5)):
-    """
-    Enhanced simulation of thermal erosion.
+def patina_formation(depth_map, thickness=0.5, coverage=0.8):
+    patina = np.random.rand(*depth_map.shape) < coverage
+    result = depth_map.astype(np.float32)
+    result[patina] += thickness * np.max(depth_map)
+    return np.clip(result, 0, np.max(result))
 
-    :param displacement_map: 2D numpy array of the displacement values.
-    :param iterations: Number of iterations to apply thermal erosion.
-    :param crack_threshold: Threshold to determine where cracks are likely to form.
-    :param smoothing_iterations: Number of times to apply smoothing to reduce isolated spikes.
-    :param smoothing_kernel_size: Size of the Gaussian kernel used for smoothing.
-    :return: Modified displacement map with thermal erosion effects.
-    """
-    eroded_displacement_map = displacement_map.copy()
 
-    for _ in range(iterations):
-        # Identify potential crack areas (high gradient areas)
-        gradient_magnitude = np.max(np.abs(np.gradient(eroded_displacement_map.astype(float))), axis=0)
-        crack_areas = gradient_magnitude > crack_threshold
+def water_erosion_channels(depth_map, num_channels=5, depth=0.2):
+    result = depth_map.astype(np.float32)
 
-        # Simulate crack formation by increasing the displacement values
-        eroded_displacement_map[crack_areas] += crack_threshold
+    for _ in range(num_channels):
+        start = np.random.randint(0, depth_map.shape[1])
+        path = np.zeros(depth_map.shape, dtype=bool)
+        current = start
+        for i in range(depth_map.shape[0]):
+            path[i, current] = True
+            current += np.random.randint(-1, 2)
+            current = np.clip(current, 0, depth_map.shape[1] - 1)
 
-    # Apply Gaussian smoothing to reduce isolated high points
-    for _ in range(smoothing_iterations):
-        eroded_displacement_map = cv2.GaussianBlur(eroded_displacement_map, smoothing_kernel_size, 0)
+        result[path] -= depth * np.max(depth_map)
 
-    # Normalize the eroded displacement map to the range [0, 1]
-    eroded_displacement_map = cv2.normalize(
-        eroded_displacement_map, None,
-        alpha=0, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
+    return np.clip(result, 0, np.max(depth_map))
 
-    # Put the maximul values and the values with minus 0.1 to the median value
-    max = np.max(eroded_displacement_map)
 
-    if iterations >= 40:
-        eroded_displacement_map[eroded_displacement_map >= 0.5] = np.median(eroded_displacement_map) - 0.05
-    else:
-        eroded_displacement_map[eroded_displacement_map == max] = np.median(eroded_displacement_map) - 0.05
-
-    return eroded_displacement_map
+def biological_growth(depth_map, coverage=0.9, thickness=0.2):
+    growth = np.random.rand(*depth_map.shape) < coverage
+    growth = cv2.GaussianBlur(growth.astype(np.float32), (5, 5), 0)
+    result = depth_map.astype(np.float32)
+    result += growth * thickness * np.max(depth_map)
+    return np.clip(result, 0, np.max(result))

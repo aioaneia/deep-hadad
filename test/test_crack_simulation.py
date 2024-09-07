@@ -10,9 +10,74 @@ import simulation.crack_simulation as crack_simulation
 
 project_path = '../'
 
-glyph_d_map_path = '../data/test_dataset/Real Preserved Glyphs/test_1.png'
+glyph_d_map_path = '../data/test_dataset/Real Glyphs/test_1.png'
 
 crack_d_map_dataset_path = '../data/masks_dataset/'
+
+
+def test_apply_mask():
+    """
+    Test the crack simulation function.
+    """
+
+    original_map = file_utils.load_displacement_map(
+        glyph_d_map_path,
+        preprocess=False,
+        resize=False,
+        apply_clahe=False
+    )
+
+    plot_utils.plot_displacement_map(
+        original_map,
+        title='Real 3D Geometry',
+        cmap='gray'
+    )
+
+    # Load and preprocess the displacement map of the glyph to be cracked
+    d_map = file_utils.load_displacement_map(
+        glyph_d_map_path,
+        preprocess=True,
+        resize=True,
+        apply_clahe=False
+    )
+
+    # Load the displacement maps of the cracks to be simulated
+    crack_d_map_paths = file_utils.get_image_paths(crack_d_map_dataset_path)
+
+    # reverse the crack_d_map_paths
+    crack_d_map_paths = crack_d_map_paths[::-1]
+
+    # Limit the number of crack displacement maps to be used for simulation
+    # crack_d_map_paths = crack_d_map_paths[:7]
+
+    # Simulate the cracks on the glyph
+    for crack_d_map_path in crack_d_map_paths:
+        crack_d_map = file_utils.load_displacement_map(
+            crack_d_map_path,
+            preprocess=True,
+            resize=False
+        )
+
+        # Simulate the crack on the glyph
+        syn_cracked_glyph_d_map = crack_simulation.apply_mask(d_map, crack_d_map)
+
+        # Display the simulated crack on the glyph
+        plot_utils.plot_displacement_map(
+            syn_cracked_glyph_d_map,
+            title='Crack 3D Geometry',
+            cmap='gray'
+        )
+
+        # plot_utils.plot_displacement_map_geometry_in_3d(
+        #     syn_cracked_glyph_d_map,
+        #     title='Crack 3D Geometry',
+        #     cmap='gray'
+        # )
+
+        # plot_comparison(d_map, syn_cracked_glyph_d_map, d_map - syn_cracked_glyph_d_map,
+        #                 ['Original Glyph', 'Simulated Crack', 'Difference'])
+
+    assert True
 
 
 def test_crack_simulation():
@@ -37,15 +102,18 @@ def test_crack_simulation():
     d_map = file_utils.load_displacement_map(
         glyph_d_map_path,
         preprocess=True,
-        resize=False,
+        resize=True,
         apply_clahe=False
     )
 
     # Load the displacement maps of the cracks to be simulated
     crack_d_map_paths = file_utils.get_image_paths(crack_d_map_dataset_path)
 
+    # reverse the crack_d_map_paths
+    crack_d_map_paths = crack_d_map_paths[::-1]
+
     # Limit the number of crack displacement maps to be used for simulation
-    crack_d_map_paths = crack_d_map_paths[:7]
+    # crack_d_map_paths = crack_d_map_paths[:7]
 
     # Simulate the cracks on the glyph
     for crack_d_map_path in crack_d_map_paths:
@@ -65,7 +133,7 @@ def test_crack_simulation():
 
         # Combine the crack maps
         target_shape = d_map.shape
-        crack_d_map = combine_crack_maps([crack_d_map, random_crack_d_map], target_shape)
+        # crack_d_map = combine_crack_maps([crack_d_map, random_crack_d_map], target_shape)
 
         # Simulate the crack on the glyph
         syn_cracked_glyph_d_map = crack_simulation.simulate_crack(d_map, crack_d_map)
@@ -77,11 +145,11 @@ def test_crack_simulation():
             cmap='gray'
         )
 
-        plot_utils.plot_displacement_map_geometry_in_3d(
-            syn_cracked_glyph_d_map,
-            title='Crack 3D Geometry',
-            cmap='gray'
-        )
+        # plot_utils.plot_displacement_map_geometry_in_3d(
+        #     syn_cracked_glyph_d_map,
+        #     title='Crack 3D Geometry',
+        #     cmap='gray'
+        # )
 
         # plot_comparison(d_map, syn_cracked_glyph_d_map, d_map - syn_cracked_glyph_d_map,
         #                 ['Original Glyph', 'Simulated Crack', 'Difference'])
@@ -142,4 +210,6 @@ if __name__ == "__main__":
     Test the crack simulation function.
     """
 
-    test_crack_simulation()
+    # test_crack_simulation()
+
+    test_apply_mask()

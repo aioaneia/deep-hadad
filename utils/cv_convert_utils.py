@@ -2,19 +2,44 @@
 import numpy as np
 
 
+# def displacement_map_to_point_cloud(displacement_map):
+#     """
+#     Convert a displacement map to a point cloud.
+#     """
+#     x, y = np.meshgrid(np.arange(displacement_map.shape[1]), np.arange(displacement_map.shape[0]))
+#
+#     z = displacement_map.flatten()
+#
+#     x = x.flatten()
+#     y = y.flatten()
+#
+#     point_cloud = np.column_stack((x.ravel(), y.ravel(), displacement_map.ravel()))
+#
+#     return point_cloud
+
+
 def displacement_map_to_point_cloud(displacement_map):
     """
-    Convert a displacement map to a point cloud.
+    Convert a displacement map to a point cloud, correcting for the mirroring effect.
 
     :param displacement_map: 2D numpy array with depth values.
-    :return: x, y, z arrays representing the point cloud coordinates.
+    :return: point_cloud: Nx3 numpy array representing the point cloud coordinates.
     """
-    x, y = np.meshgrid(np.arange(displacement_map.shape[1]), np.arange(displacement_map.shape[0]))
-    z = displacement_map.flatten()
+    height, width = displacement_map.shape
+
+    # Create a meshgrid of coordinates
+    y, x = np.mgrid[0:height, 0:width]
+
+    # Flip the y-coordinates to match the image orientation
+    y = height - 1 - y
+
+    # Flatten the arrays
     x = x.flatten()
     y = y.flatten()
+    z = displacement_map.flatten()
 
-    point_cloud = np.column_stack((x.ravel(), y.ravel(), displacement_map.ravel()))
+    # Stack the coordinates
+    point_cloud = np.column_stack((x, y, z))
 
     return point_cloud
 
