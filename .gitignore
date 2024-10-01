@@ -61,10 +61,12 @@ Thumbs.db
 /data/syn_inscriptions
 
 /data/test_dataset/Test Case
+/data/test_dataset/Real Damaged Inscriptions
 
 /data/plots
 
 /data/glyphs_dataset/preserved_glyphs/textured_glyphs
 
 /data/glyphs_dataset/preserved_glyphs/small_displacement_maps
-/data/test_dataset/Real Damaged Inscriptions
+
+
