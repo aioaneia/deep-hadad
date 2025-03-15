@@ -25,28 +25,16 @@ class SelfAttentionModule(nn.Module):
         return out
 
 
-class ResidualBlock(nn.Module):
-    def __init__(self, in_features):
-        super(ResidualBlock, self).__init__()
-        self.block = nn.Sequential(
-            spectral_norm(nn.Conv2d(in_features, in_features, 3, padding=1)),
-            nn.LeakyReLU(0.2, inplace=True),
-            spectral_norm(nn.Conv2d(in_features, in_features, 3, padding=1))
-        )
-
-    def forward(self, x):
-        return x + self.block(x)
-
-
 class MinibatchStdDev(nn.Module):
     def __init__(self):
         super().__init__()
 
     def forward(self, x):
-        batch_size, _, height, width = x.shape
-        std = torch.std(x, dim=0, unbiased=False)
-        mean_std = torch.mean(std)
-        mean_std = mean_std.expand((batch_size, 1, height, width))
+        batch_size, _, h, w = x.shape
+        # Compute std over batch + spatial dimensions
+        std = torch.std(x, dim=0, unbiased=False)  # [C, H, W]
+        # Average over all dimensions to get scalar per sample
+        mean_std = torch.mean(std).expand(batch_size, 1, h, w)  # [B,1,H,W]
         return torch.cat([x, mean_std], dim=1)
 
 
@@ -57,7 +45,7 @@ class DiscriminatorBlock(nn.Module):
         layers = [spectral_norm(nn.Conv2d(in_filters, out_filters, 4, stride=2, padding=1))]
 
         if normalize:
-            layers.append(nn.InstanceNorm2d(out_filters))
+            layers.append(nn.GroupNorm(num_groups=8, num_channels=out_filters))
 
         layers.append(nn.LeakyReLU(0.2, inplace=True))
 
@@ -67,66 +55,47 @@ class DiscriminatorBlock(nn.Module):
         return self.block(x)
 
 
-class NewDiscriminator(nn.Module):
-    def __init__(self, input_nc, ndf=64, n_layers=4, use_sigmoid=False):
-        super(NewDiscriminator, self).__init__()
-
-        # self.multi_scale_discriminators = nn.ModuleList([
-        #     self.create_single_discriminator(input_nc, ndf, n_layers, use_sigmoid)
-        #     for _ in range(3)  # 3 scales
-        # ])
-
-        self.model = self.create_single_discriminator(input_nc, ndf, n_layers, use_sigmoid)
-
-        # self.downsample = nn.AvgPool2d(3, stride=2, padding=[1, 1], count_include_pad=False)
-
+class DeepHadadDiscriminator(nn.Module):
+    def __init__(self, input_nc, ndf=64, n_layers=4):
+        super(DeepHadadDiscriminator, self).__init__()
+        self.model = self.create_single_discriminator(input_nc, ndf, n_layers)
         self.apply(initialize_weights)
-
         self.init_self_attention()
 
 
-    def create_single_discriminator(self, input_nc, ndf, n_layers, use_sigmoid):
+    @staticmethod
+    def create_single_discriminator(input_nc, ndf, n_layers):
         layers = []
-
         in_filters = input_nc
 
+        # Downsampling blocks
         for i in range(n_layers):
             out_filters = ndf * min(2**i, 8)
 
             layers.append(DiscriminatorBlock(in_filters, out_filters, normalize=(i > 0)))
 
-            if i == 1 or i == 3:
+            if i == 2 or i == 3:
                 layers.append(SelfAttentionModule(out_filters))
+            else:
+                layers.append(nn.Identity())
 
             in_filters = out_filters
 
         # Output layer
-        layers.append(ResidualBlock(in_filters))
         layers.append(MinibatchStdDev())
         layers.append(spectral_norm(nn.Conv2d(in_filters + 1, in_filters, 3, padding=1)))
         layers.append(nn.LeakyReLU(0.2, inplace=True))
         layers.append(spectral_norm(nn.Conv2d(in_filters, 1, 4, padding=0)))
-
-        if use_sigmoid:
-            layers.append(nn.Sigmoid())
 
         return nn.Sequential(*layers)
 
     def init_self_attention(self):
         for module in self.modules():
             if isinstance(module, SelfAttentionModule):
-                nn.init.constant_(module.gamma, 0.0)
+                nn.init.constant_(module.gamma, 0.1)
 
     def forward(self, input):
         return self.model(input)
-
-    # def forward(self, input):
-    #     results = []
-    #     for i, d in enumerate(self.multi_scale_discriminators):
-    #         if i != 0:
-    #             input = self.downsample(input)
-    #         results.append(d(input))
-    #     return results
 
 
 def initialize_weights(m):
@@ -134,7 +103,7 @@ def initialize_weights(m):
         nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
-    elif isinstance(m, nn.InstanceNorm2d):
+    elif isinstance(m, (nn.InstanceNorm2d, nn.GroupNorm, nn.LayerNorm)):
         if m.weight is not None:
             nn.init.constant_(m.weight, 1)
         if m.bias is not None:
