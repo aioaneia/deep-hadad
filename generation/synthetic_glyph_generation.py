@@ -1,6 +1,4 @@
-import logging
 import random
-
 import numpy as np
 import torch
 
@@ -39,8 +37,11 @@ class SyntheticDatasetGenerator:
         self.preserved_d_maps = file_utils.load_displacement_maps_from_directory(
             displacement_maps_path,
             preprocess=True,
-            resize=True
+            resize=False  # Do not resize the displacement maps
         )
+
+        # keep only the first 3 for testing TODO: remove this
+        self.preserved_d_maps = self.preserved_d_maps[:3]
 
         self.crack_d_maps = file_utils.load_crack_displacement_maps_from_directory(
             cracks_dataset_path,
@@ -51,64 +52,6 @@ class SyntheticDatasetGenerator:
             masks_dataset_path,
             preprocess=True
         )
-
-
-    def get_real_input_target_pairs(self, image_size=(256, 256), save_dataset=False):
-        """
-        Load the real displacement maps and create pairs of intact-damaged displacement maps
-        """
-
-        data_sets = {
-            'input': [],
-            'target': [],
-            'segmap': []
-        }
-
-        set_index = 0
-
-        real_damaged_d_maps = file_utils.load_displacement_maps_from_directory(
-            'data/glyphs_dataset/damaged_glyphs/input_d_maps/',
-            preprocess=True)
-
-        real_preserved_d_maps = file_utils.load_displacement_maps_from_directory(
-            'data/glyphs_dataset/damaged_glyphs/target_d_maps/',
-            preprocess=True)
-
-        # Iterate through the real displacement maps and create pairs of intact-damaged displacement maps
-        for i in range(len(real_damaged_d_maps)):
-            input_d_map_pair = real_damaged_d_maps[i]
-            target_d_map_pair = real_preserved_d_maps[i]
-
-            # resize the displacement maps to the target size
-            # input_d_map_pair = file_utils.resize_and_pad_depth_map(input_d_map_pair, target_size=image_size)
-            # target_d_map_pair = file_utils.resize_and_pad_depth_map(target_d_map_pair, target_size=image_size)
-
-            input_d_map_pair_tensor = file_utils.transform_displacement_map_to_tensor(input_d_map_pair)
-            target_d_map_pair_tensor = file_utils.transform_displacement_map_to_tensor(target_d_map_pair)
-
-            data_sets['input'].append(input_d_map_pair_tensor)
-            data_sets['target'].append(target_d_map_pair_tensor)
-
-            # Create segmentation maps (random for testing)
-            for _ in range(len(data_sets['input'])):
-                # Simple uniform map or a random segmentation map
-                segmap = np.ones((1, *image_size))  # Replace with actual segmentation logic
-                data_sets['segmap'].append(torch.tensor(segmap, dtype=torch.float32))  # Correct key used here
-
-            if save_dataset:
-                file_utils.save_paired_images(
-                    input_d_map_pair,
-                    target_d_map_pair,
-                    self.input_training_dataset_path,
-                    self.target_training_dataset_path,
-                    set_index,
-                    1)
-
-            set_index += 1
-
-        dataset_generator = SyntheticDataset(data_sets['input'], data_sets['target'], data_sets['segmap'])
-
-        return dataset_generator
 
     def generate_synthetic_input_target_pairs(self,
                                               dataset_size=700,  # limit of the number of synthetic displacement maps
@@ -122,8 +65,7 @@ class SyntheticDatasetGenerator:
 
         data_sets = {
             'input': [],
-            'target': [],
-            'segmap': []
+            'target': []
         }
 
         set_index = 0
@@ -140,48 +82,71 @@ class SyntheticDatasetGenerator:
             # Append the generated data to the dataset
             data_sets['input'].extend(data_set['input'])
             data_sets['target'].extend(data_set['target'])
-
             set_index += 1
 
             # check if the preserved_d_map size is larger than image_size
-            if preserved_d_map.shape[0] > 700 and preserved_d_map.shape[1] > 700:
+            if preserved_d_map.shape[0] > 600 and preserved_d_map.shape[1] > 600:
                 # print the preserved displacement map size
+                print("================Augmented Data================")
                 print(f"Preserved displacement map size: {preserved_d_map.shape}")
                 print(preserved_d_map.shape[0])
                 print(preserved_d_map.shape[1])
 
-                for i in range(3):
-                    augmented_d_map = aug_utils.augment_preserved_glyph_image(preserved_d_map.copy())
+                # # Extract patches with overlap
+                # patches = self.extract_patches(preserved_d_map, patch_size=image_size, overlap=0.3)
+                #
+                # for patch in patches:
+                #     # Generate damage for each patch
+                #     patch_dataset = self.generate_pairs_from_d_map(
+                #         patch,
+                #         image_size,
+                #         20,
+                #         save_dataset,
+                #         set_index
+                #     )
+                #
+                #     data_sets['input'].extend(patch_dataset['input'])
+                #     data_sets['target'].extend(patch_dataset['target'])
+                #     set_index += 1
 
-                    aug_data_set = self.generate_pairs_from_d_map(
-                        augmented_d_map,
-                        image_size,
-                        dataset_size / 5,
-                        save_dataset,
-                        set_index
-                    )
+                # for i in range(5):
+                #     augmented_d_map = aug_utils.augment_preserved_glyph_image(preserved_d_map.copy())
+                #
+                #     aug_data_set = self.generate_pairs_from_d_map(
+                #         augmented_d_map,
+                #         image_size,
+                #         10,
+                #         save_dataset,
+                #         set_index
+                #     )
+                #
+                #     # Append the generated data to the dataset
+                #     data_sets['input'].extend(aug_data_set['input'])
+                #     data_sets['target'].extend(aug_data_set['target'])
+                #     set_index += 1
 
-                    # Append the generated data to the dataset
-                    data_sets['input'].extend(aug_data_set['input'])
-                    data_sets['target'].extend(aug_data_set['target'])
+                print("================Augmented Data End================")
 
-                    # Create segmentation maps
-                    for _ in range(len(aug_data_set['input'])):
-                        # Simple uniform map or a random segmentation map
-                        segmap = np.ones((1, *image_size))  # Replace with actual segmentation logic
-                        data_sets['segmap'].append(torch.tensor(segmap, dtype=torch.float32))
-
-                    set_index += 1
-
-            # Create segmentation maps (random for testing)
-            for _ in range(len(data_set['input'])):
-                # Simple uniform map or a random segmentation map
-                segmap = np.ones((1, *image_size))  # Replace with actual segmentation logic
-                data_sets['segmap'].append(torch.tensor(segmap, dtype=torch.float32))  # Correct key used here
-
-        dataset_generator = SyntheticDataset(data_sets['input'], data_sets['target'], data_sets['segmap'])
+        dataset_generator = SyntheticDataset(data_sets['input'], data_sets['target'])
 
         return dataset_generator
+
+    @staticmethod
+    def extract_patches(d_map, patch_size=(256, 256), overlap=0.5):
+        """
+        Extract overlapping patches from larger displacement maps
+        """
+        patches = []
+        h, w = d_map.shape[:2]
+        stride_h = int(patch_size[0] * (1 - overlap))
+        stride_w = int(patch_size[1] * (1 - overlap))
+
+        for y in range(0, h - patch_size[0] + 1, stride_h):
+            for x in range(0, w - patch_size[1] + 1, stride_w):
+                patch = d_map[y:y+patch_size[0], x:x+patch_size[1]].copy()
+                patches.append(patch)
+
+        return patches
 
     def generate_pairs_from_d_map(self,
                                   d_map,  # preserved displacement map
@@ -230,73 +195,28 @@ class SyntheticDatasetGenerator:
 
         return dataset
 
-    def generate_damage_simulations_for_d_map(self,
-                                              d_map,
-                                              erosion_iterations=3,
-                                              dataset_size=400):
+    def generate_damage_simulations_for_d_map(self, d_map, erosion_iterations=3, dataset_size=100):
         """
         Generate synthetic displacement maps by simulating damage on the glyph displacement map
         """
-
         syn_d_maps = []
 
         # ----------------- Apply Erosion simulation ----------------- #
         for i in range(erosion_iterations):
             syn_eroded_d_map = erosion_simulation.simulate_cv2_erosion(
                 d_map,
-                kernel_size_range=(10, 16),
-                intensity=1.0,
+                kernel_size_range=(6, 10),
+                intensity=0.5,
                 iterations=i
             )
             syn_eroded_d_map = weathering_simulation.water_erosion_channels(
                 syn_eroded_d_map,
-                num_channels=1,
+                num_channels=2,
                 depth=0.2
             )
 
             syn_d_maps.append(syn_eroded_d_map)
         # ----------------- End erosion simulation ----------------- #
-
-        # ----------------- Apply patina simulation ----------------- #
-        thickness = 0.1
-        coverage  = 0.1
-        for i in range(2):
-            syn_weathered_d_map = weathering_simulation.patina_formation(
-                d_map,
-                thickness=thickness,
-                coverage=coverage
-            )
-            syn_weathered_d_map = weathering_simulation.water_erosion_channels(
-                syn_weathered_d_map,
-                num_channels=2,
-                depth=0.25
-            )
-
-            syn_d_maps.append(syn_weathered_d_map)
-
-            thickness += 0.02
-            coverage  += 0.05
-        # ----------------- End patina simulation ----------------- #
-
-        # ----------------- Apply biological growth simulation ----------------- #
-        coverage  = 0.1
-        thickness = 0.3
-        for i in range(2):
-            syn_weathered_d_map = weathering_simulation.biological_growth(
-                d_map,
-                coverage  = coverage,
-                thickness = thickness
-            )
-            syn_weathered_d_map = weathering_simulation.water_erosion_channels(
-                syn_weathered_d_map,
-                num_channels=2,
-                depth=0.2
-            )
-            syn_d_maps.append(syn_weathered_d_map)
-
-            coverage  += 0.1
-            thickness += 0.1
-        # ----------------- End biological growth simulation ----------------- #
 
         # ----------------- Apply water erosion simulation ----------------- #
         syn_weathered_d_map = weathering_simulation.water_erosion_channels(
@@ -319,29 +239,23 @@ class SyntheticDatasetGenerator:
                 break
 
             for crack_d_map in crack_d_maps:
-                syn_crack_d_map = crack_simulation.simulate_crack(
-                    syn_d_map,
-                    crack_d_map
-                )
+                syn_crack_d_map = crack_simulation.simulate_crack(syn_d_map, crack_d_map)
 
                 syn_crack_d_map = elastic_simulation.apply_elastic_transform_2d(
                     syn_crack_d_map,
-                    alpha=200,
-                    sigma=10
+                    alpha=540,
+                    sigma=8
                 )
 
                 syn_crack_d_maps.append(syn_crack_d_map)
 
             for mask_d_map in mask_d_maps:
-                syn_mask_d_map = crack_simulation.apply_mask(
-                    syn_d_map,
-                    mask_d_map
-                )
+                syn_mask_d_map = crack_simulation.apply_mask(syn_d_map, mask_d_map)
 
                 syn_mask_d_map = elastic_simulation.apply_elastic_transform_2d(
                     syn_mask_d_map,
-                    alpha=180,
-                    sigma=10
+                    alpha=40,
+                    sigma=8
                 )
 
                 syn_crack_d_maps.append(syn_mask_d_map)
@@ -360,33 +274,3 @@ class SyntheticDatasetGenerator:
 
         return random.sample(self.mask_d_maps, size)
 
-
-####################################################################################################
-# Main
-# - Load displacement maps
-# - Generate synthetic displacement maps
-# - Validate the generated data
-####################################################################################################
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    project_path = '../'
-
-    # displacement_maps_path = project_path + 'data/glyph_dataset/preserved_glyphs/displacement_maps/'
-    #
-    # crack_d_map_dataset_path = project_path + 'data/masks_dataset/'
-    #
-    # input_training_dataset_path = project_path + 'data/training_dataset/X/'
-    #
-    # target_training_dataset_path = project_path + 'data/training_dataset/Y/'
-    #
-    # generator = SyntheticDatasetGenerator(
-    #     displacement_maps_path,
-    #     crack_d_map_dataset_path,
-    #     input_training_dataset_path,
-    #     target_training_dataset_path)
-    #
-    # dataset = generator.generate_synthetic_input_target_pairs(
-    #     dataset_size=700,
-    #     image_size=(512, 512),
-    #     save_dataset=True
-    # )

@@ -47,6 +47,15 @@ def compute_ssim(img1, img2):
     """
     return ssim(img1, img2)
 
+def compute_stroke_width_error(fake, real):
+    # fake_sw = skeletonize(fake).sum(dim=[1,2,3])
+    # real_sw = skeletonize(real).sum(dim=[1,2,3])
+    # return F.l1_loss(fake_sw, real_sw)
+    pass
+
+
+def compute_contour_fscore(fake, real):
+    pass
 
 class SobelFilter(nn.Module):
     """
@@ -97,8 +106,8 @@ def combined_score(psnr, ssim, edge_similarity):
     Computes a combined score that takes into account PSNR, SSIM, and ESI.
     """
     weighted_psnr = 0.4 * psnr
-    weighted_ssim = 0.3 * ssim
-    weighted_edge = 0.3 * edge_similarity
+    weighted_ssim = 0.4 * ssim
+    weighted_edge = 0.2 * edge_similarity
 
     total_score = weighted_psnr + weighted_ssim + weighted_edge
 

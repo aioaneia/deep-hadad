@@ -81,10 +81,8 @@ def load_displacement_maps(path, preprocess=False, resize=False, apply_clahe=Fal
     return displacement_maps
 
 
-def load_displacement_map(d_map_path, preprocess=False, resize=False, apply_clahe=False):
-    """
-    Load a glyph image from the specified path.
-    """
+def load_displacement_map(d_map_path, preprocess=False, resize=False, apply_clahe=False, target_size=(256, 256)):
+    """Load a glyph image from the specified path."""
     d_map = cv2.imread(d_map_path, cv2.IMREAD_GRAYSCALE)
 
     if d_map is None:
@@ -95,7 +93,7 @@ def load_displacement_map(d_map_path, preprocess=False, resize=False, apply_clah
         d_map = preprocess_displacement_map(d_map, apply_clahe=apply_clahe)
 
     if resize:
-        d_map = resize_and_pad_depth_map(d_map, target_size=(256, 256))
+        d_map = resize_and_pad_depth_map(d_map, target_size=target_size)
 
     return d_map
 
@@ -163,36 +161,15 @@ def preprocess_displacement_map(d_map, apply_clahe=False):
     return d_map
 
 
-# def resize_and_pad(img, target_size=(512, 512)):
-#     h, w = img.shape
-#     scale = min(target_size[0] / h, target_size[1] / w)
-#     new_h, new_w = int(h * scale), int(w * scale)
-#     img_resized = cv2.resize(
-#         img,
-#         (new_w, new_h),
-#         interpolation=cv2.INTER_AREA
-#     )
-#
-#     # Set the canvas with the correct dtype from the start
-#     canvas = np.zeros((target_size[0], target_size[1]), dtype=np.float32)
-#     top = (target_size[0] - new_h) // 2
-#     left = (target_size[1] - new_w) // 2
-#     canvas[top:top + new_h, left:left + new_w] = img_resized
-#
-#     return canvas
-
-
 def resize_and_pad_depth_map(depth_map, target_size=(256, 256)):
     h, w = depth_map.shape
     scale = min(target_size[0] / h, target_size[1] / w)
     new_h, new_w = int(h * scale), int(w * scale)
 
     # Resize using INTER_LINEAR for depth maps
-    depth_map_resized = cv2.resize(
-        depth_map,
-        (new_w, new_h),
-        interpolation=cv2.INTER_LINEAR
-    )
+    # interpolation = cv2.INTER_CUBIC if scale < 1 else cv2.INTER_LINEAR
+    interpolation = cv2.INTER_LINEAR
+    depth_map_resized = cv2.resize(depth_map, (new_w, new_h), interpolation=interpolation)
 
     # Calculate padding
     top = (target_size[0] - new_h) // 2

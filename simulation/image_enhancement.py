@@ -4,8 +4,6 @@ import numpy as np
 
 
 def apply_sobel(image):
-    # gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
     sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=5)
     sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5)
 
@@ -41,6 +39,7 @@ def denoise_image(image):
         dtype=cv2.CV_32F)
 
     return denoised
+
 
 # Sharpen image
 def apply_histogram_equalization(displacement_map):

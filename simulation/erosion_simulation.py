@@ -1,16 +1,20 @@
-
 import cv2
 import numpy as np
 
-from scipy.ndimage import gaussian_filter
+
+class DepthAwareErosion:
+    def __init__(self, depth_map):
+        self.depth_map = depth_map
+
+    def apply(self):
+        # Deeper regions erode faster
+        erosion_strength = np.clip(self.depth_map * 2.5, 1, 10)
+
+        kernel_size = int(5 + erosion_strength.mean())
+
+        return cv2.erode(self.depth_map, kernel=np.ones((kernel_size,kernel_size)))
 
 
-####################################################################################################
-# 2D Image Processing functions for damage simulation
-# - Erosion simulation
-# - Crack simulation
-# - Missing parts simulation
-####################################################################################################
 def simulate_cv2_erosion(glyph, kernel_size_range=(3, 14), intensity=1.0, iterations=1):
     """
     Simulate erosion of a glyph using OpenCV erode function.
@@ -90,34 +94,4 @@ def top_hat_transform(glyph, kernel_size_range=(3, 14), intensity=1.0, iteration
 
     return top_hat
 
-
-# def measure_glyph_elevation_difference(glyph_depth_map, glyph_mask):
-#     """
-#     Measure the elevation difference between the glyph and its surroundings.
-#     """
-#
-#     glyph_elevation = np.mean(glyph_depth_map[glyph_mask])
-#     surroundings_elevation = np.mean(glyph_depth_map[~glyph_mask])
-#     elevation_difference = glyph_elevation - surroundings_elevation
-#
-#     return elevation_difference
-
-
-####################################################################################################
-# 3D Point Cloud Processing functions for damage simulation
-# - Gaussian erosion simulation
-# - Crack simulation
-# - Missing parts simulation
-####################################################################################################
-# def simulate_gaussian_erosion_in_point_cloud(point_cloud, erosion_iterations=10, smoothing_sigma=1.0):
-#     """
-#     Simulate erosion of a point cloud using Gaussian smoothing.
-#     """
-#
-#     eroded_point_cloud = point_cloud.copy()
-#
-#     for _ in range(erosion_iterations):
-#         eroded_point_cloud[:, 2] = gaussian_filter(eroded_point_cloud[:, 2], sigma=smoothing_sigma)
-#
-#     return eroded_point_cloud
 

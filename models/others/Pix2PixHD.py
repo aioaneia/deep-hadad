@@ -4,7 +4,7 @@ import os
 from torch.autograd import Variable
 from util.image_pool import ImagePool
 from .base_model import BaseModel
-from . import networks
+from models import networks
 
 class Pix2PixHDModel(BaseModel):
     def name(self):

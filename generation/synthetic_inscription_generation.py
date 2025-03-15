@@ -3,6 +3,7 @@ import random
 import numpy as np
 import cv2
 
+
 def load_and_normalize_letter_depth_maps(folder_path, target_height=256):
     letter_maps = {}
     for filename in os.listdir(folder_path):
@@ -15,6 +16,7 @@ def load_and_normalize_letter_depth_maps(folder_path, target_height=256):
             letter_maps[letter] = resized_map
     return letter_maps
 
+
 def preprocess_displacement_map(d_map, apply_clahe=False):
     d_map = cv2.medianBlur(d_map, 5)
     if apply_clahe:
@@ -22,6 +24,7 @@ def preprocess_displacement_map(d_map, apply_clahe=False):
         d_map = clahe.apply(d_map)
     d_map = cv2.normalize(d_map, None, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
     return d_map
+
 
 def resize_depth_map(depth_map, target_height=256):
     aspect_ratio = depth_map.shape[1] / depth_map.shape[0]
@@ -93,6 +96,7 @@ def add_realistic_wear(image, wear_factor=0.03):
     eroded = cv2.erode(worn_image, erosion_kernel, iterations=1)
     worn_image = cv2.addWeighted(worn_image, 0.8, eroded, 0.2, 0)
     return np.clip(worn_image, 0, 255).astype(np.uint8)
+
 
 def generate_multiple_patches(letter_maps, num_patches, min_letters_per_line=5, max_letters_per_line=10, min_lines=3, max_lines=10):
     patches = []
