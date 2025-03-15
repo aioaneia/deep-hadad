@@ -13,7 +13,6 @@ def apply_viridis_colormap(displacement_map, title="Displacement Map", save_imag
     """
     Apply Viridis colormap to a displacement map and save it as an image.
     """
-    # Apply the Viridis colormap
     colormap = plt.get_cmap('viridis')
     colored_map = colormap(displacement_map)
 
@@ -29,20 +28,15 @@ def apply_viridis_colormap(displacement_map, title="Displacement Map", save_imag
     return image
 
 
-def plot_displacement_map(
-        displacement_map,
-        title="Displacement Map",
-        cmap='viridis',
-        save_plot=False):
-    """
-    Plot a displacement map as a heatmap.
-    """
-
+def plot_displacement_map(displacement_map, title, cmap, save_plot=False):
+    """Plot a displacement map with a given title and colormap."""
     plt.figure(figsize=(10, 8))
-    plt.imshow(displacement_map, cmap=cmap, interpolation='nearest')
 
-    plt.colorbar(label='Elevation')
+    # Plot the displacement map
+    im = plt.imshow(displacement_map, cmap=cmap)
+
     plt.title(title)
+
     plt.axis('off')  # Hide axis for clarity in the article
 
     if save_plot:

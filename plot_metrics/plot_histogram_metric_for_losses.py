@@ -35,7 +35,7 @@ def calculate_metrics(damaged_maps, preserved_maps):
         damaged_map = damaged_map.unsqueeze(0)  # Add batch dimension
         preserved_map = preserved_map.unsqueeze(0)  # Add batch dimension
 
-        metrics['L1 Loss'].append(LossF.DHadadLossFunctions.l1_loss(preserved_map).item())
+        metrics['L1 Loss'].append(LossF.DHadadLossFunctions.l1_loss().item())
         metrics['SSIM Loss'].append(LossF.DHadadLossFunctions.ssim_loss(preserved_map).item())
         metrics['Geometric Consistency Loss'].append(LossF.DHadadLossFunctions.geometric_consistency_loss(
             preserved_map).item())
