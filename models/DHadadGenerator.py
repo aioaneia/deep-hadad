@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import spectral_norm
-from torchvision.ops import DeformConv2d
 
 
 class SelfAttention(nn.Module):
@@ -34,7 +33,6 @@ class CBAM(nn.Module):
         self.spatial_attention = nn.Sequential(
             nn.Conv2d(channels, 1, (7, 1), padding=(3, 0)),        # Vertical strokes
             nn.Conv2d(1, 1, (1, 7), padding=(0, 3)),  # Horizontal strokes
-            # nn.Conv2d(channels, 1, 7, padding=3),
             nn.Sigmoid()
         )
 

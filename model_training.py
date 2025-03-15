@@ -1,22 +1,21 @@
 import functools
-import glob
 import logging
 import os
 import time
 import numpy as np
 import torch
+
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
-from torch.optim import Adam
+from torch.optim import RAdam
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 
 from models.DHadadLossFunctions import DHadadLossFunctions
 from models.DHadadLossWeights import DHadadLossWeights
 
-from models.NewDiscriminator import NewDiscriminator
-from models.SpadeGenerator import SpadeGenerator
-from models.Spade2Generator import Spade2Generator
+from models.DeepHadadDiscriminator import DeepHadadDiscriminator
+from models.DHadadGenerator import DHadadGenerator
 
 from utils.SyntheticDataset import SyntheticDataset
 
@@ -29,18 +28,21 @@ if torch.cuda.is_available():
     device = torch.device("cuda")
     print("CUDA device found.")
 elif torch.backends.mps.is_available():
+    # Regular cache cleanup
     device = torch.device("mps")
     print("MPS device found.")
 else:
     device = torch.device("cpu")
     print("No CUDA or MPS device found, using CPU.")
 
+# scaler = torch.amp.GradScaler('mps', enabled=False)  # Disable AMP
+
 # PyTorch version
 print("PyTorch version: " + torch.__version__)
 
 #### Set hyperparameter values for training ####
-generator_lr          = 0.0002
-discriminator_lr      = 0.0001
+generator_lr          = 0.0003
+discriminator_lr      = 0.00015
 batch_size            = 6
 num_epochs            = 150
 checkpoint_interval   = 3
@@ -55,46 +57,27 @@ TRAINING_DATASET_PATH   = PROJECT_PATH + 'data/training_dataset'
 X_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/X'
 Y_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/Y'
 
-DISPLACEMENT_MAPS_PATH       = PROJECT_PATH + 'data/glyphs_dataset/preserved_glyphs/small_displacement_maps/'
+DISPLACEMENT_MAPS_PATH       = PROJECT_PATH + 'data/glyphs_dataset/preserved_glyphs/displacement_maps/'
+DISPLACEMENT_MAPS_PATH_LARGE = PROJECT_PATH + 'data/glyphs_dataset/preserved_glyphs/displacement_maps_large_size/'
 CRACKS_DATASET_PATH          = PROJECT_PATH + 'data/cracks_dataset/'
 MASKS_DATASET_PATH           = PROJECT_PATH + 'data/masks_dataset/'
 INPUT_TRAINING_DATASET_PATH  = PROJECT_PATH + 'data/training_dataset/X/'
 TARGET_TRAINING_DATASET_PATH = PROJECT_PATH + 'data/training_dataset/Y/'
 
 MODEL_PATH         = PROJECT_PATH + 'trained_models/'
-MODEL_WEIGHTS_PATH = MODEL_PATH + 'dh_l_model_ep_1_l10.50_s1.00_m1.00_g2.50_t0.10_f1.00_a0.50.pth'
+MODEL_WEIGHTS_PATH = MODEL_PATH + 'dh_model_ep_19_l8.00_s2.00_g3.00_f0.80_c1.00_a0.10.pth'
 
 IMAGE_EXTENSIONS = [".png", ".jpg", ".tif"]
 
 # Dynamic Loss Weights for adjusting the loss weights during training
-loss_weights = DHadadLossWeights(
-    total_epochs=num_epochs
-)
+loss_weights = DHadadLossWeights(total_epochs=num_epochs)
 
 # Initialize loss functions with the device
 loss_functions = DHadadLossFunctions(device=device)
 
 
-# Get the paths of all images in a directory
-def get_image_paths(directory):
-    image_paths = []
-
-    for ext in IMAGE_EXTENSIONS:
-        image_paths.extend(glob.glob(os.path.join(directory, '*' + ext)))
-
-    return sorted(image_paths)
-
-
 def get_norm_layer(norm_type='instance'):
-    """Return a normalization layer
-
-    Parameters:
-        norm_type (str) -- the name of the normalization layer: batch | instance | none
-
-    For BatchNorm, we use learnable affine parameters and track running statistics (mean/stddev).
-    For InstanceNorm, we do not use learnable affine parameters. We do not track running statistics.
-    """
-
+    """Return a normalization layer"""
     if norm_type == 'batch':
         norm_layer = functools.partial(nn.BatchNorm2d, affine=True, track_running_stats=True)
     elif norm_type == 'instance':
@@ -109,61 +92,25 @@ def get_norm_layer(norm_type='instance'):
     return norm_layer
 
 
-########################################################################################
-# Instantiate the generator and discriminator
-
-########################################################################################
-def instantiate_networks(type='unet_512', num_downs=7, ngf=64, norm_type='instance', use_dropout=False,
-                         use_se_block=False):
-    """
-    Instantiates the generator and discriminator
-    :param type: The type of network to instantiate (dh, unet, or resnet)
-    :return: The generator and discriminator
-    """
-
+def instantiate_networks(ngf=64, n_down_sampling=3, n_blocks=6):
+    """Instantiates the generator and discriminator"""
     # grayscale images, 3 for RGB images
-    gen_in_channels = 1
-    # to generate grayscale restored images 
+    gen_in_channels  = 1
     gen_out_channels = 1
 
-    norm_layer = get_norm_layer(norm_type=norm_type)
+    generator = DHadadGenerator(
+        input_nc       = 1,
+        output_nc      = 1,
+        ngf            = ngf,               # Number of generator filters
+        n_downsampling = n_down_sampling,   # Number of down_sampling layers
+         n_blocks       = n_blocks          # Number of ResBlocks
+    ).to(device)
 
-    if type == 'spade_256':
-        generator = Spade2Generator(
-            input_nc       = 1,   # 1 channel for displacement map input
-            output_nc      = 1,   # 1 channel for displacement map output
-            label_nc       = 1,   # 1 channel for any additional input (like segmentation map)
-            ngf            = 64,  # Number of generator filters
-            n_downsampling = 3,   # Number of downsampling layers
-            n_blocks       = 9    # Number of ResBlocks
-        ).to(device)
-
-        discriminator = NewDiscriminator(
-            input_nc=2,
-            ndf=64,
-            n_layers=4,
-            use_sigmoid=False
-        ).to(device)
-        pass
-    elif type == 'spade_512':
-        generator = Spade2Generator(
-            input_nc       = 1,   # 1 channel for displacement map input
-            output_nc      = 1,   # 1 channel for displacement map output
-            label_nc       = 1,   # 1 channel for any additional input (like segmentation map)
-            ngf            = 96,  # Number of generator filters
-            n_downsampling = 4,   # Number of downsampling layers
-            n_blocks       = 9    # Number of ResBlocks
-        ).to(device)
-
-        discriminator = NewDiscriminator(
-            input_nc=2,
-            ndf=64,
-            n_layers=5,
-            use_sigmoid=False
-        ).to(device)
-    else:
-        print(f"Error: Unknown network type {type}")
-        return None
+    discriminator = DeepHadadDiscriminator(
+        input_nc=2,
+        ndf=ngf,
+        n_layers=n_down_sampling + 1
+    ).to(device)
 
     return generator, discriminator
 
@@ -171,9 +118,6 @@ def instantiate_networks(type='unet_512', num_downs=7, ngf=64, norm_type='instan
 def load_model_weights(model, model_path):
     """
     Loads the model weights from the specified path
-    :param model: The model to load the weights into
-    :param model_path: The path to the model weights if available
-    :return: The model with the loaded weights
     """
     # Check if the model weights exist
     if not os.path.exists(model_path):
@@ -191,14 +135,10 @@ def load_model_weights(model, model_path):
     return model
 
 
-########################################################################################
-# Initialize Optimizers
-# RMSProp or Adagrad
-########################################################################################
 def init_optimizer(generator, discriminator):
     # Initialize optimizers
-    gen_optim = Adam(generator.parameters(), lr=generator_lr, betas=(0.5, 0.999), amsgrad=True)
-    dis_optim = Adam(discriminator.parameters(), lr=discriminator_lr, betas=(0.5, 0.999), amsgrad=True)
+    gen_optim = RAdam(generator.parameters(), lr=generator_lr, betas=(0.5, 0.999))
+    dis_optim = RAdam(discriminator.parameters(), lr=discriminator_lr, betas=(0.5, 0.999))
 
     return gen_optim, dis_optim
 
@@ -237,8 +177,14 @@ def init_schedulers(gen_optim, dis_optim, opt="plateau"):
     elif opt == 'cosine':
         gen_scheduler = lr_scheduler.CosineAnnealingLR(
             gen_optim,
-            T_max=opt.n_epochs,
-            eta_min=0
+            T_max=150,
+            eta_min=1e-6
+        )
+
+        dis_scheduler = lr_scheduler.CosineAnnealingLR(
+            dis_optim,
+            T_max=150,
+            eta_min=1e-6
         )
     else:
         return NotImplementedError('learning rate policy [%s] is not implemented', opt.lr_policy)
@@ -249,22 +195,20 @@ def init_schedulers(gen_optim, dis_optim, opt="plateau"):
 def train_discriminator_step(discriminator, damaged_dm, preserved_dm, fake_dm):
     """
     Training step for the discriminator
+    damage_mask = torch.abs(damaged_dm - preserved_dm) > threshold
     """
-    damaged_dm   = damaged_dm.to(device)
-    preserved_dm = preserved_dm.to(device)
-    fake_dm      = fake_dm.to(device)
+    combined_real = torch.cat([damaged_dm, preserved_dm], dim=1)
+    combined_fake = torch.cat([damaged_dm, fake_dm.detach()], dim=1)
 
-    combined_damaged_real = torch.cat([damaged_dm, preserved_dm], dim=1)
-    combined_damaged_fake = torch.cat([damaged_dm, fake_dm], dim=1)
+    real_pred = discriminator(combined_real)
+    fake_pred = discriminator(combined_fake)
 
-    real_pred = discriminator(combined_damaged_real)
-    fake_pred = discriminator(combined_damaged_fake)
-
-    dis_loss = loss_functions.hinge_loss_discriminator(real_pred, fake_pred)
+    adv_loss = torch.mean(fake_pred) - torch.mean(real_pred)
 
     # Compute gradient penalty
-    # gradient_penalty = loss_functions.compute_gradient_penalty(discriminator, damaged_dm, fake_dm, preserved_dm)
-    # dis_loss += lambda_gp * gradient_penalty
+    gradient_penalty = loss_functions.compute_gradient_penalty(discriminator, damaged_dm, fake_dm, preserved_dm)
+
+    dis_loss = adv_loss + lambda_gp * gradient_penalty
 
     # Ensure the loss is a scalar
     if not isinstance(dis_loss, torch.Tensor) or dis_loss.numel() > 1:
@@ -282,49 +226,32 @@ def safe_item(tensor):
     return tensor
 
 
-def train_generator_step(preserved_dm, fake_dm, dis_pred_fake):
-    """
-    Training step for the generator
-    """
-    l1_loss       = loss_functions.l1_loss(preserved_dm, fake_dm)
-    ssim_loss     = loss_functions.ssim_loss(preserved_dm, fake_dm)
-    # ms_ssim_loss = loss_functions.ms_ssim_loss(preserved_dm, fake_dm)
-    gdl           = loss_functions.gradient_difference_loss(preserved_dm, fake_dm)
-    tv_loss       = loss_functions.tv_loss(fake_dm)
-    freq_loss     = loss_functions.frequency_domain_loss(preserved_dm, fake_dm)
-    adv_loss      = loss_functions.hinge_loss_generator(dis_pred_fake)
+def train_generator_step(fake_dm, preserved_dm, dis_pred_fake):
+    """Training step for the generator"""
+    l1_loss   = loss_functions.l1_loss(fake_dm, preserved_dm)
+    ssim_loss = loss_functions.ssim_loss(fake_dm, preserved_dm)
+    gdl       = loss_functions.gradient_loss(fake_dm, preserved_dm)
+    adv_loss  = -torch.mean(dis_pred_fake)
 
     gen_loss = (
-            loss_weights.current_weights['l1']       * l1_loss +
-            loss_weights.current_weights['ssim']     * ssim_loss +
-            # loss_weights.current_weights['ms_ssim']  * ms_ssim_loss +
-            loss_weights.current_weights['freq']     * freq_loss +
-            loss_weights.current_weights['gdl']      * gdl +
-            loss_weights.current_weights['tv']       * tv_loss +
-            loss_weights.current_weights['adv']      * adv_loss
+            loss_weights.current_weights['l1']   * l1_loss +
+            loss_weights.current_weights['ssim'] * ssim_loss +
+            loss_weights.current_weights['gdl']  * gdl +
+            loss_weights.current_weights['adv']  * adv_loss
     )
-
-    # Ensure the loss is a scalar
-    # if not isinstance(gen_loss, torch.Tensor) or gen_loss.numel() > 1:
-    #     gen_loss = gen_loss.mean()
 
     loss_dict = {
         'L1':          safe_item(l1_loss),
         'SSIM':        safe_item(ssim_loss),
-        # 'Perceptual':  safe_item(ms_ssim_loss),
-        'Frequency':   safe_item(freq_loss),
         'GDL':         safe_item(gdl),
-        'TV':          safe_item(tv_loss),
         'Adversarial': safe_item(adv_loss),
     }
 
     return gen_loss, loss_dict
 
 
-def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader, accumulation_steps=6):
-    """
-    Training step for the generator and discriminator
-    """
+def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader, accumulation_steps=2):
+    """Training step for the generator and discriminator"""
     generator.train()
     discriminator.train()
 
@@ -333,41 +260,71 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader,
     total_dis_loss = 0
     accumulated_loss_components = None
     batch_count = 0
+    dis_updates = 0
+    n_critic = 3
 
-    for i, (damaged_dm, preserved_dm, segmap) in enumerate(train_dataloader):
+    for i, (damaged_dm, preserved_dm) in enumerate(train_dataloader):
         batch_count += 1
+        damaged_dm = damaged_dm.clamp(0, 1).to(device)
+        preserved_dm = preserved_dm.clamp(0, 1).to(device)
 
-        damaged_dm   = damaged_dm.to(device)
-        preserved_dm = preserved_dm.to(device)
-        segmap       = segmap.to(device)
-
-        # Check inputs
-        if torch.isnan(damaged_dm).any() or torch.isnan(segmap).any():
+        if torch.isnan(damaged_dm).any() or torch.isnan(preserved_dm).any():
             print("NaN detected in inputs to the generator!")
+            print(f"Skipping batch {i} due to NaN values in input")
+            continue
 
-        # Generate fake data
-        fake_dm = generator(damaged_dm, segmap)
+        # Generate fake samples
+        with torch.no_grad():
+            fake_dm = generator(damaged_dm)
 
-        # Check fake data
         if torch.isnan(fake_dm).any():
             print("NaN detected in fake depth map!")
+            print(f"Skipping batch {i} due to NaN values in fake depth map")
+            continue
 
-        # Discriminator step
-        dis_loss = train_discriminator_step(discriminator, damaged_dm, preserved_dm, fake_dm.detach())
-        dis_loss = dis_loss / accumulation_steps
+        # ----- Discriminator Training -----
+        dis_batch_loss = 0
+        for _ in range(n_critic):
+            dis_optim.zero_grad()
 
-        if torch.isnan(dis_loss).any():
-            print("NaN detected in discriminator loss!")
+            dis_loss = train_discriminator_step(discriminator, damaged_dm, preserved_dm, fake_dm.detach())
 
-        dis_loss.backward()
+            dis_loss = dis_loss / accumulation_steps
 
-        total_dis_loss += dis_loss.item() * accumulation_steps
+            if torch.isnan(dis_loss).any():
+                print("NaN detected in discriminator loss!")
+                continue
 
-        # Generator step
-        with torch.no_grad():
-            dis_pred_fake = discriminator(torch.cat([damaged_dm, fake_dm], dim=1))
+            dis_loss.backward()
+            dis_batch_loss += dis_loss.item()
+            dis_updates += 1
 
-        gen_loss, loss_components = train_generator_step(preserved_dm, fake_dm, dis_pred_fake)
+        # Average the discriminator loss across n_critic updates
+        dis_batch_loss = dis_batch_loss * accumulation_steps / n_critic
+        total_dis_loss += dis_batch_loss
+
+        # Perform optimization step every accumulation_steps
+        if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_dataloader):
+            clip_grad_norm_(discriminator.parameters(), max_norm=max_grad_norm)
+            dis_optim.step()
+
+        # ----- Generator Training (less frequent) -----
+        gen_optim.zero_grad()
+
+        # Generate new fake samples for generator training
+        fake_dm = generator(damaged_dm)
+
+        # Freeze discriminator for generator training
+        for param in discriminator.parameters():
+            param.requires_grad = False
+
+        # Get discriminator predictions for generator training
+        dis_pred_fake = discriminator(torch.cat([damaged_dm, fake_dm], dim=1))
+
+        # Train generator
+        gen_loss, loss_components = train_generator_step(fake_dm, preserved_dm, dis_pred_fake)
+
+        # Scale loss if accumulating gradients
         gen_loss = gen_loss / accumulation_steps
 
         if torch.isnan(gen_loss).any():
@@ -376,6 +333,10 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader,
         gen_loss.backward()
 
         total_gen_loss += gen_loss.item() * accumulation_steps
+
+        # Unfreeze discriminator for its training
+        for param in discriminator.parameters():
+            param.requires_grad = True
 
         # Accumulate loss components
         if accumulated_loss_components is None:
@@ -387,25 +348,14 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader,
         # Perform optimization step every accumulation_steps
         if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_dataloader):
             # Gradient clipping
-            clip_grad_norm_(discriminator.parameters(), max_norm=max_grad_norm)
             clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
-
-            clip_grad_norm_(generator.attention_mid.parameters(), max_norm=1.0)
-            clip_grad_norm_(generator.attention_after_down.parameters(), max_norm=1.0)
-
-            # Optimization step
-            dis_optim.step()
             gen_optim.step()
 
-            # Zero gradients
-            dis_optim.zero_grad()
-            gen_optim.zero_grad()
-
-            # Log progress
-            if (i + 1) % (accumulation_steps * 25) == 0:
-                print(f"Processed {i + 1}/{len(train_dataloader)} batches")
-                time_per_batch = (time.time() - start_time) / (i + 1)
-                print(f"Time per batch: {time_per_batch:.2f} seconds")
+        # Log progress
+        if (i + 1) % (accumulation_steps * 50) == 0:
+            print(f"Processed {i + 1}/{len(train_dataloader)} batches")
+            time_per_batch = (time.time() - start_time) / (i + 1)
+            print(f"Time per batch: {time_per_batch:.2f} seconds")
 
     # Calculate average losses
     avg_gen_loss = total_gen_loss / batch_count
@@ -415,40 +365,19 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader,
     return avg_gen_loss, avg_loss_components, avg_dis_loss
 
 
-def validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis, max_grad_norm):
+def validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis):
     """
     Validation step after each epoch
     """
-    # Switch to evaluation mode
     generator.eval()
     discriminator.eval()
-    val_gen_loss = 0
-    val_dis_loss = 0
 
     with torch.no_grad():
-        for damaged_dm, preserved_dm, seg_map in val_dataloader:
-            damaged_dm   = damaged_dm.to(device)
-            preserved_dm = preserved_dm.to(device)
-            seg_map      = seg_map.to(device)
+        for damaged_dm, preserved_dm in val_dataloader:
+            damaged_dm = damaged_dm.clamp(0, 1).to(device)
+            preserved_dm = preserved_dm.clamp(0, 1).to(device)
 
-            fake_dm = generator(damaged_dm, seg_map)
-
-            # # Compute discriminator predictions
-            # combined_damaged_real = torch.cat([damaged_dm, preserved_dm], dim=1)
-            # combined_damaged_fake = torch.cat([damaged_dm, fake_dm], dim=1)
-            # dis_pred_real = discriminator(combined_damaged_real)
-            # dis_pred_fake = discriminator(combined_damaged_fake)
-            #
-            # # Compute losses
-            # gen_loss = loss_functions.l1_loss(fake_dm, preserved_dm)
-            # dis_loss = loss_functions.discriminator_loss(dis_pred_real, dis_pred_fake)
-            #
-            # val_gen_loss += gen_loss.item()
-            # val_dis_loss += dis_loss.item()
-
-            # Clamp the values to be between 0 and 1
-            fake_dm = fake_dm.clamp(0, 1)
-            preserved_dm = preserved_dm.clamp(0, 1)
+            fake_dm = generator(damaged_dm)
 
             # Compute PSNR, SSIM, ESI for the current batch
             batch_psnr = dh_metrics.compute_psnr(fake_dm, preserved_dm)
@@ -464,14 +393,10 @@ def validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis
     generator.train()
     discriminator.train()
 
-    return val_gen_loss, val_dis_loss
-
 
 def calculate_performance_metrics(epoch, best_psnr, psnrs, best_ssim, ssims, best_esi, esis,
                                   epoch_time, gen_loss, loss_components, dis_loss, gen_optim, dis_optim):
-    """
-    Calculate the performance metrics for the current epoch
-    """
+    """Calculate the performance metrics for the current epoch"""
     # Move tensors to CPU and convert to float
     psnrs_cpu = [x.cpu().item() if torch.is_tensor(x) else x for x in psnrs]
     ssims_cpu = [x.cpu().item() if torch.is_tensor(x) else x for x in ssims]
@@ -515,9 +440,7 @@ def calculate_performance_metrics(epoch, best_psnr, psnrs, best_ssim, ssims, bes
 
 
 def save_model(generator, epoch, loss_weights):
-    """
-    Save the model checkpoint
-    """
+    """Save the model checkpoint"""
     MODEL_NAME = f"dh_model_ep_{epoch}{loss_weights.get_weights_as_string()}.pth"
 
     print(f"-> Saving model checkpoint at epoch {epoch}")
@@ -525,32 +448,14 @@ def save_model(generator, epoch, loss_weights):
     torch.save(generator.state_dict(), os.path.join(MODEL_PATH, MODEL_NAME))
 
 
-# Function to print the gradients of the first layer of the model
-def print_gradients(model, message):
-    print(message)
-
-    # Assuming the first layer of the model is a Conv2d layer. Adjust if your model differs.
-    first_layer = list(model.modules())[1]
-
-    for name, param in first_layer.named_parameters():
-        if param.requires_grad:
-            # param.grad can be None if the gradient has not been computed yet
-            print(f"Layer: {name}, Gradient: {param.grad if param.grad is not None else 'No gradient computed yet'}")
-
-
 ########################################################################################
 # Training Loop
 ########################################################################################
-def network_training(
-        generator, discriminator,
-        gen_optim, dis_optim,
-        num_epochs,
-        current_epoch=0,
-        train_dataset_size=30,
-        val_dataset_size=6,
-        image_size=(512, 512)):
+def network_training(generator, discriminator, gen_optim, dis_optim,
+                     num_epochs, current_epoch=0, train_dataset_size=30, val_dataset_size=6,
+                     image_sizes=None):
     # Learning Rate Scheduling
-    gen_scheduler, dis_scheduler = init_schedulers(gen_optim, dis_optim, opt="plateau")
+    gen_scheduler, dis_scheduler = init_schedulers(gen_optim, dis_optim, opt="cosine")
 
     # Initialize some variables for averaging
     best_psnr = -float('inf')
@@ -569,38 +474,34 @@ def network_training(
 
     # Load the dataset
     train_dataloader, val_dataloader = load_dataset(
+        DISPLACEMENT_MAPS_PATH,
         train_size=train_dataset_size,
         val_size=val_dataset_size,
         save_images=False,
-        image_size=image_size
+        image_sizes=image_sizes
     )
 
-    # Training loop for each epoch. if the current epoch is 0, it will start from the beginning, if not,
-    # it will start from the current epoch
+    large_train_dataloader, large_val_dataloader = load_dataset(
+        DISPLACEMENT_MAPS_PATH_LARGE,
+        train_size=train_dataset_size,
+        val_size=val_dataset_size,
+        save_images=False,
+        image_sizes=[(512, 512)]
+    )
+
     for epoch in range(current_epoch, num_epochs):
-
-        # # # Load the dataset
-        # train_dataloader, val_dataloader = load_dataset(
-        #     train_size=train_dataset_size,
-        #     val_size=val_dataset_size,
-        #     save_images=False,
-        #     image_size=image_size
-        # )
-
-        # Start time for this epoch
         start_time = time.time()
 
-        # Training step
-        gen_loss, loss_components, dis_loss = train_step(
-            generator, gen_optim, discriminator, dis_optim, train_dataloader)
+        gen_loss, loss_components, dis_loss = train_step(generator, gen_optim, discriminator,
+                                                         dis_optim, train_dataloader)
 
-        # Validation step
-        validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis, max_grad_norm)
+        gen_loss_2, loss_components_2, dis_loss_2 = train_step(generator, gen_optim, discriminator,
+                                                         dis_optim, large_train_dataloader)
 
-        # Calculate time taken for this epoch
+        validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis)
+
         epoch_time = time.time() - start_time
 
-        # Store for future analysis
         epoch_times.append(epoch_time)
 
         # Calculate performance metrics for this epoch
@@ -645,13 +546,9 @@ def network_training(
         gen_scheduler.step(gen_loss)
         dis_scheduler.step(dis_loss)
 
-        # Reset for next epoch 
         psnrs.clear()
         ssims.clear()
         esis.clear()
-
-        train_dataset_size += 2
-        val_dataset_size   += 2
 
         # Adjust loss weights based on the epoch and model performance
         loss_weights.manage_epoch_weights(epoch)
@@ -663,46 +560,51 @@ def network_training(
     print(f"Final Loss Weights:     {loss_weights.current_weights}")
 
 
-def load_dataset(save_images=False, train_size=3, val_size=2, image_size=(512, 512)):
-    """
-    Loads the training dataset
-    :return: The dataloaders for both training dataset and validation dataset
-    """
+def load_dataset(dm_maps_path, save_images=False, train_size=3, val_size=2, image_sizes=None):
+    """Loads the training dataset"""
+    if image_sizes is None:
+        image_sizes = [(256, 256)]
+
     dataset_generator = SyntheticDatasetGenerator(
-        displacement_maps_path       = DISPLACEMENT_MAPS_PATH,
+        displacement_maps_path       = dm_maps_path,
         cracks_dataset_path          = CRACKS_DATASET_PATH,
         masks_dataset_path           = MASKS_DATASET_PATH,
         input_training_dataset_path  = INPUT_TRAINING_DATASET_PATH,
         target_training_dataset_path = TARGET_TRAINING_DATASET_PATH
     )
 
-    synthetic_train_dataset = dataset_generator.generate_synthetic_input_target_pairs(
-        dataset_size=train_size,
-        image_size=image_size,
-        save_dataset=save_images
-    )
+    combined_train_inputs = []
+    combined_train_targets = []
 
-    val_dataset = dataset_generator.generate_synthetic_input_target_pairs(
-        dataset_size=val_size,
-        image_size=image_size,
-        save_dataset=save_images
-    )
+    combined_val_inputs = []
+    combined_val_targets = []
 
-    # Load the real damage/restored damage pairs
-    real_train_dataset = dataset_generator.get_real_input_target_pairs(
-        image_size=image_size,
-        save_dataset=save_images
-    )
+    for image_size in image_sizes:
+        train_dataset: SyntheticDataset = dataset_generator.generate_synthetic_input_target_pairs(
+            dataset_size=train_size,
+            image_size=image_size,
+            save_dataset=save_images
+        )
 
-    # Combine synthetic and real training datasets
-    combined_train_inputs = synthetic_train_dataset.input_images + real_train_dataset.input_images
-    combined_train_targets = synthetic_train_dataset.target_images + real_train_dataset.target_images
-    combined_train_segmaps = synthetic_train_dataset.seg_maps + real_train_dataset.seg_maps
+        val_dataset: SyntheticDataset = dataset_generator.generate_synthetic_input_target_pairs(
+            dataset_size=val_size,
+            image_size=image_size,
+            save_dataset=save_images
+        )
 
-    combined_train_dataset = SyntheticDataset(combined_train_inputs, combined_train_targets, combined_train_segmaps)
+        # Combine synthetic and real training datasets
+        combined_train_inputs  += train_dataset.input_images
+        combined_train_targets += train_dataset.target_images
 
-    train_dataloader = DataLoader(synthetic_train_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-    val_dataloader   = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+        combined_val_inputs  += val_dataset.input_images
+        combined_val_targets += val_dataset.target_images
+
+    train_dataset = SyntheticDataset(combined_train_inputs, combined_train_targets)
+
+    val_dataset = SyntheticDataset(combined_val_inputs, combined_val_targets)
+
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    val_dataloader   = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
 
     return train_dataloader, val_dataloader
 
@@ -718,11 +620,9 @@ if __name__ == "__main__":
 
     # Instantiate the generator and discriminator
     generator, discriminator = instantiate_networks(
-        type='spade_256',  # unet_512
-        num_downs=8,
         ngf=64,
-        norm_type='instance',
-        use_dropout=True
+        n_down_sampling=3,
+        n_blocks=9
     )
 
     # Load the model weights if available
@@ -737,9 +637,9 @@ if __name__ == "__main__":
         gen_optim, dis_optim,
         num_epochs,
         current_epoch      = 0,
-        train_dataset_size = 300,
-        val_dataset_size   = 60,
-        image_size         = (256, 256)
+        train_dataset_size = 5,
+        val_dataset_size   = 3,
+        image_sizes         = [(256, 256)]
     )
 
     print("Done!")

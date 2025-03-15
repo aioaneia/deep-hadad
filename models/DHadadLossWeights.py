@@ -1,29 +1,6 @@
 
 class DHadadLossWeights:
-    """
-    The initial weights for the loss function
-    """
-    # loss_weights = {
-    #     # Early training (establish basic shapes)
-    #     'e_0_9':   {'l1': 12.0, 'ssim': 1.0, 'gdl': 2.0, 'freq': 0.5, 'curvature': 0.5, 'adv': 0.05},
-    #
-    #     # Transition to structural focus
-    #     'e_10_19': {'l1': 10.0, 'ssim': 2.0, 'gdl': 3.0, 'freq': 0.8, 'curvature': 1.0, 'adv': 0.1},
-    #     'e_20_29': {'l1': 9.0, 'ssim': 3.0, 'gdl': 4.0, 'freq': 1.0, 'curvature': 1.5, 'adv': 0.3},
-    #
-    #     # Mid-training (balance pixel and structural accuracy)
-    #     'e_30_39': {'l1': 8.0, 'ssim': 4.0, 'gdl': 5.0, 'freq': 1.5, 'curvature': 2.0, 'adv': 0.4},
-    #     'e_40_59': {'l1': 7.0, 'ssim': 5.0, 'gdl': 6.0, 'freq': 2.0, 'curvature': 2.5, 'adv': 0.5},
-    #
-    #     # Later training (enhance edges and textures)
-    #     'e_60_79': {'l1': 6.0, 'ssim': 5.0, 'gdl': 7.0, 'freq': 2.5, 'curvature': 3.0, 'adv': 0.8},
-    #     'e_80_99': {'l1': 5.0, 'ssim': 5.0, 'gdl': 8.0, 'freq': 3.0, 'curvature': 3.5, 'adv': 1.0},
-    #
-    #     # Final refinement (focus on realism and fine details)
-    #     'e_100_119': {'l1': 4.0, 'ssim': 5.0, 'gdl': 9.0, 'freq': 3.5, 'curvature': 4.0, 'adv': 1.2},
-    #     'e_120_150': {'l1': 3, 'ssim': 5.0, 'gdl': 10.0, 'freq': 4.0, 'curvature': 5.0, 'adv': 1.5},
-    # }
-
+    """The initial weights for the loss function"""
     loss_weights = {
         # Early training (establish basic shapes)
         'e_0_9':   {'l1': 1.0, 'ssim': 0.3, 'gdl': 2.0, 'adv': 0.1},
