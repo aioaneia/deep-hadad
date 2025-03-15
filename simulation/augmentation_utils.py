@@ -1,25 +1,10 @@
-
 import albumentations as A
 
 shared_augmentation_pipeline = A.Compose([
-    A.Rotate(limit=20, p=1.0),  # Moderate rotation
-    A.RandomScale(scale_limit=0.2, p=0.5),  # Slight scaling to simulate distance variations
-    # A.PadIfNeeded(min_height=512, min_width=512, always_apply=True, border_mode=cv2.BORDER_CONSTANT, value=0),
-    A.RandomCrop(height=256, width=256, always_apply=True),
-    A.Perspective(scale=(0.05, 0.1), p=0.5),  # Moderate perspective transformations
-    A.ElasticTransform(alpha=1, sigma=50, p=0.2),  # Subtle elastic transformations
-])
-
-damaging_augmentation_pipeline = A.Compose([
-    A.RandomBrightnessContrast(brightness_limit=(-0.2, 0.2), contrast_limit=(-0.2, 0.2), p=0.7),
-    A.GaussNoise(var_limit=(20, 60), p=0.6),
-    A.RandomGamma(gamma_limit=(80, 120), p=0.6),
-    A.ElasticTransform(alpha=2, sigma=50, p=0.5),
-    A.CoarseDropout(max_holes=10, max_height=20, max_width=20, min_holes=3, fill_value=0, p=0.6),
-    A.GaussianBlur(blur_limit=(3, 7), p=0.5),
-    A.Rotate(limit=15, p=0.5),
-    # Replace 'desired_height' and 'desired_width' with actual values
-    A.RandomCrop(height=512, width=512, p=0.5),
+    A.Rotate(limit=10, p=0.8),
+    A.RandomScale(scale_limit=0.1, p=0.5),
+    A.RandomCrop(height=384, width=384),
+    A.Perspective(scale=(0.05, 0.08), p=0.5)
 ])
 
 
