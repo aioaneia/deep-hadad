@@ -6,7 +6,7 @@
 /data/training_dataset/*
 /data/glyphs_dataset/preserved_glyphs/textured_glyphs
 /data/syn_inscriptions
-/data/plots
+/data/plots/*
 /trained_models/*
 
 # OS generated files #

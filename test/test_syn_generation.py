@@ -12,21 +12,12 @@ import simulation.augmentation_utils as aug_utils
 project_path                 = '../'
 
 glyphs_for_testing_path      = [
-    # '../data/test_dataset/Real Preserved Glyphs/test_t00.png',
-    # '../data/test_dataset/Real Preserved Glyphs/test_t01.png',
     '../data/test_dataset/Real Glyphs/test_1.png',
-    # '../data/test_dataset/Real Glyphs/test_2.png',
-    # '../data/test_dataset/Real Glyphs/depthmap_1.png',
-    # '../data/test_dataset/Real Glyphs/depthmap_2.png',
-    # '../data/test_dataset/Real Glyphs/depthmap_3.png',
-    # '../data/test_dataset/Real Glyphs/depthmap_4.png',
-    # '../data/test_dataset/Real Glyphs/depthmap_5.png',
-    # '../data/test_dataset/Real Preserved Glyphs/test_t03.png',
-    # '../data/test_dataset/Real Preserved Glyphs/test_t3.png',
-    # '../data/test_dataset/Real Preserved Glyphs/test_t4.png',
-    # '../data/test_dataset/Real Preserved Glyphs/test_t5.png',
-    # '../data/test_dataset/Real Preserved Glyphs/test_t6.png',
-    # '../data/test_dataset/Real Preserved Glyphs/test_t7.png',
+    '../data/test_dataset/Real Glyphs/test_2.png',
+    '../data/test_dataset/Real Glyphs/test_3.png',
+    '../data/test_dataset/Real Glyphs/test_4.png',
+    '../data/test_dataset/Real Glyphs/test_5.png',
+    '../data/test_dataset/Real Glyphs/test_6.png',
 ]
 
 displacement_maps_path       = project_path + 'data/glyphs_dataset/preserved_glyphs/displacement_maps/'
@@ -43,7 +34,8 @@ to_pil = ToPILImage()
 def test_synthetic_generation():
     glyph_d_map = file_utils.load_displacement_map(
         glyphs_for_testing_path[0],
-        preprocess=True, resize=False
+        preprocess=True,
+        resize=False
     )
 
     # Plot the original image
@@ -62,28 +54,71 @@ def test_synthetic_generation():
 
     dataset = None
 
-    # Generate synthetic displacement maps from the original glyph displacement maps
-    dataset = generator.generate_synthetic_input_target_pairs(
-        dataset_size = 100,
-        image_size   = (256, 256),
-        save_dataset = True
-    )
+    # Generate synthetic displacement maps from all the original glyph displacement maps
+    # dataset = generator.generate_synthetic_input_target_pairs(
+    #     dataset_size = 100,
+    #     image_size   = (256, 256),
+    #     save_dataset = True
+    # )
 
+    set_index = 0
+
+    # Generate synthetic displacement maps from the original glyph displacement map
     for i, glyph_path in enumerate(glyphs_for_testing_path):
         glyph_d_map = file_utils.load_displacement_map(
             glyph_path,
             preprocess=True,
-            resize=True
+            resize=False
         )
 
         # Generate synthetic displacement maps from the original glyph displacement map
         dataset = generator.generate_pairs_from_d_map(
             glyph_d_map,
-            dataset_size=700,
+            dataset_size=50,
             save_dataset=True,
-            set_index=i,
+            set_index=set_index,
             d_map_size=(256, 256)
         )
+
+        set_index += 1
+
+        # check if the preserved_d_map size is larger than image_size
+        if glyph_d_map.shape[0] > 550 and glyph_d_map.shape[1] > 550:
+            # print the preserved displacement map size
+            print("================Augmented Data================")
+            print(f"Preserved displacement map size: {glyph_d_map.shape}")
+            print(glyph_d_map.shape[0])
+            print(glyph_d_map.shape[1])
+
+            # Extract patches with overlap
+            # patches = generator.extract_patches(glyph_d_map, patch_size=(358, 358), overlap=0.3)
+            #
+            # for patch in patches:
+            #     # Generate damage for each patch
+            #     patch_dataset = generator.generate_pairs_from_d_map(
+            #         patch,
+            #         (256, 256),
+            #         10,
+            #         True,
+            #         set_index
+            #     )
+            #
+            #     set_index += 1
+
+            for j in range(5):
+                augmented_d_map = aug_utils.augment_preserved_glyph_image(glyph_d_map.copy())
+
+                aug_data_set = generator.generate_pairs_from_d_map(
+                    augmented_d_map,
+                    (256, 256),
+                    20,
+                    True,
+                    set_index
+                )
+
+                set_index += 1
+
+            print("================Augmented Data End================")
 
     # Plot a cluster of input synthetic displacement maps (damaged displacement maps)
     plot_displacement_map_cluster(

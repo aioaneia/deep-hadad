@@ -98,7 +98,6 @@ def test_crack_simulation():
         cmap='gray'
     )
 
-    # Load and preprocess the displacement map of the glyph to be cracked
     d_map = file_utils.load_displacement_map(
         glyph_d_map_path,
         preprocess=True,
@@ -113,7 +112,7 @@ def test_crack_simulation():
     crack_d_map_paths = crack_d_map_paths[::-1]
 
     # Limit the number of crack displacement maps to be used for simulation
-    # crack_d_map_paths = crack_d_map_paths[:7]
+    crack_d_map_paths = crack_d_map_paths[:5]
 
     # Simulate the cracks on the glyph
     for crack_d_map_path in crack_d_map_paths:
@@ -136,11 +135,19 @@ def test_crack_simulation():
         # crack_d_map = combine_crack_maps([crack_d_map, random_crack_d_map], target_shape)
 
         # Simulate the crack on the glyph
-        syn_cracked_glyph_d_map = crack_simulation.simulate_crack(d_map, crack_d_map)
+        syn_cracked_glyph_d_map = crack_simulation.improved_crack_simulation(d_map, crack_d_map)
+
+        syn_mask_d_map = crack_simulation.apply_mask(d_map, crack_d_map)
 
         # Display the simulated crack on the glyph
         plot_utils.plot_displacement_map(
             syn_cracked_glyph_d_map,
+            title='Crack 3D Geometry',
+            cmap='gray'
+        )
+
+        plot_utils.plot_displacement_map(
+            syn_mask_d_map,
             title='Crack 3D Geometry',
             cmap='gray'
         )
@@ -161,9 +168,6 @@ def combine_crack_maps(crack_maps, target_shape):
     """
     Combine multiple crack maps by taking the maximum value at each pixel location.
     Ensures all crack maps are resized to target_shape.
-    :param crack_maps: List of 2D numpy arrays with depth values of the cracks
-    :param target_shape: Tuple (height, width) to resize crack maps to
-    :return: Combined crack map
     """
 
     resized_crack_maps = [
@@ -210,6 +214,6 @@ if __name__ == "__main__":
     Test the crack simulation function.
     """
 
-    # test_crack_simulation()
+    test_crack_simulation()
 
-    test_apply_mask()
+    # test_apply_mask()

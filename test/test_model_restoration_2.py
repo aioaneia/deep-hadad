@@ -1,14 +1,14 @@
-import functools
+
 import os
 import numpy as np
 import torch
-import torch.nn as nn
 from torchvision.transforms import ToPILImage, Compose, ToTensor
 
 import utils.cv_file_utils as fu
 import utils.plot_utils as plot_utils
+import utils.cv_convert_utils as convert_utils
 
-from models.Spade2Generator import Spade2Generator
+from models.DHadadGenerator import DHadadGenerator
 
 
 os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
@@ -17,9 +17,9 @@ print("PyTorch version: " + torch.__version__)
 
 PROJECT_PATH = '../'
 
-LARGE_D_MAP_PATH = PROJECT_PATH + "data/test_dataset/Real Damaged Inscriptions/KAI_214_d_map_1.png"
+LARGE_D_MAP_PATH = PROJECT_PATH + "data/test_dataset/Real Damaged Inscriptions/s_8_input.png"
 
-model_1 = 'dh_model_ep_17_l10.50_s1.50_m1.00_g3.00_t0.10_f2.00_a1.00.pth'
+model_1 = 'dh_model_ep_19_l8.00_s2.00_g3.00_f0.80_c1.00_a0.10.pth'
 
 MODEL_PATH = PROJECT_PATH + 'trained_models/' + model_1
 
@@ -42,19 +42,13 @@ def load_model(model, model_path):
 
 
 def load_dh_generator():
-    """
-    Loads the generator for the DHadad model
-    :return: The generator
-    """
-
-    """ Loads the generator for the DHadad model """
-    return Spade2Generator(
+    """Loads the generator for the DHadad model"""
+    return DHadadGenerator(
         input_nc=1,
         output_nc=1,
-        label_nc=1,
         ngf=64,
-        n_downsampling=3,
-        n_blocks=8
+        n_downsampling=4,
+        n_blocks=6
     ).to(device)
 
 
@@ -62,20 +56,24 @@ def restore_d_map(generator, d_map_tensor, invert_pixel_values=True):
     """
     Generates the restored image from the image
     """
-
     with torch.no_grad():
         # Add a batch dimension and move to the GPU if needed
         broken_image = d_map_tensor.unsqueeze(0)
-        segmap = torch.zeros_like(broken_image)
 
         # Generate the restored image and remove the batch dimension
-        restored_image = generator(broken_image, segmap).squeeze(0).cpu()
+        restored_image = generator(broken_image).squeeze(0).cpu()
 
         # Normalize the image to the range [0, 1]
         restored_image = (restored_image - restored_image.min()) / (restored_image.max() - restored_image.min())
 
+        # Convert the tensor to a numpy array
+        restored_image = restored_image.numpy()
+
     if invert_pixel_values:
         restored_image = 1 - restored_image
+
+    # Remove extra dimensions explicitly and ensure it matches the slice
+    restored_image = np.squeeze(restored_image)
 
     return restored_image
 
@@ -127,9 +125,7 @@ def restore_large_displacement_map(
 
                 # Turn off gradients for testing
                 with torch.no_grad():
-                    segmap = torch.zeros_like(patch_tensor)
-
-                    restored_patch_tensor = generator(patch_tensor, segmap).squeeze(0).cpu()
+                    restored_patch_tensor = generator(patch_tensor).squeeze(0).cpu()
 
                     # Normalize the output to the range [0, 1]
                     restored_patch_tensor = (restored_patch_tensor - restored_patch_tensor.min()) / (
@@ -162,87 +158,51 @@ def restore_large_displacement_map(
 
 
 if __name__ == "__main__":
-    # Load the DHadad generator architecture
     generator = load_dh_generator()
 
-    # Load the generator weights
     generator = load_model(generator, MODEL_PATH)
 
     # Load the large displacement map without preprocessing
-    d_map = fu.load_displacement_map(
-        LARGE_D_MAP_PATH,
-        preprocess=False,
-        resize=False,
-        apply_clahe=True
-    )
+    d_map = fu.load_displacement_map(LARGE_D_MAP_PATH, preprocess=False, resize=False, apply_clahe=True)
 
     # Load the large displacement map without preprocessing
-    d_map_enhanced = fu.load_displacement_map(
-        LARGE_D_MAP_PATH,
-        preprocess=True,
-        resize=False,
-        apply_clahe=False
-    )
+    d_map_enhanced = fu.load_displacement_map(LARGE_D_MAP_PATH, preprocess=True, resize=False, apply_clahe=True)
 
+    ### Restoration ###
+    # Generate restored image for the original displacement map
+    restored_large_d_map = restore_large_displacement_map(generator, d_map_enhanced, crop_size=(512, 512), overlap=(0, 0),
+                                                          apply_clahe=False, invert_pixel_values=False,
+                                                          test_stitch=False)
+
+    resize_small_d_map = fu.resize_and_pad_depth_map(d_map, target_size=(512, 512))
+    restore_small_d_map = restore_d_map(generator, transform(resize_small_d_map), invert_pixel_values=False)
+
+    ### Plots ###
     # Plot the original displacement map without preprocessing
-    plot_utils.plot_displacement_map(
-        d_map,
-        title=f'Displacement Map',
-        cmap='gray'  # Other cmaps: 'viridis'
-    )
+    plot_utils.plot_displacement_map(d_map, title=f'Displacement Map', cmap='gray')  # Other cmaps: 'viridis', 'coolwarm'
 
     # Plot the enhanced displacement map with image processing
-    plot_utils.plot_displacement_map(
-        d_map_enhanced,
-        title=f'Displacement Map',
-        cmap='gray'  # Other cmaps: 'viridis'
-    )
+    plot_utils.plot_displacement_map(d_map_enhanced, title=f'Displacement Map', cmap='gray')
 
-    # Generate restored image for the original displacement map
-    restored_d_map = restore_large_displacement_map(
-        generator,
-        d_map,
-        crop_size=(512, 512),
-        overlap=(0, 0),
-        apply_clahe=True,
-        invert_pixel_values=False,
-        test_stitch=False
-    )
+    # Plot the restored displacement map small
+    plot_utils.plot_displacement_map(restore_small_d_map, title='Restored Displacement Map', cmap='gray', save_plot=True)
 
-    # Plot the restored image
-    plot_utils.plot_displacement_map(
-        restored_d_map,
-        title='Restored Displacement Map',
-        cmap='gray',  # Other cmaps: 'viridis', 'coolwarm',
-        save_plot=True
-    )
-
+    # Plot the restored displacement map large
+    plot_utils.plot_displacement_map(restored_large_d_map, title='Restored Displacement Map', cmap='gray', save_plot=True)
 
     # Apply viridis colormap to the restored displacement map
-    restored_d_map_viridis_ = plot_utils.apply_viridis_colormap(
-        restored_d_map,
-        title='Restored Displacement Map (Viridis)',
-        save_image=True
-    )
+    restored_d_map_viridis = plot_utils.apply_viridis_colormap(restored_large_d_map,
+                                                               title='Restored Displacement Map (Viridis)',
+                                                               save_image=True)
 
     # Save the restored displacement map to a file
-    fu.save_displacement_map(
-        restored_d_map,
-        '../data/plots/',
-        'restored_d_map.png'
-    )
+    fu.save_displacement_map(restored_large_d_map, '../data/plots/', 'restored_d_map.png')
 
     # Normalize the restored displacement map to the range [0, 1]
-    # restored_d_map = en.apply_histogram_equalization(restored_d_map)
-    restored_d_map = fu.preprocess_displacement_map(restored_d_map, apply_clahe=False)
+    restored_large_d_map = fu.preprocess_displacement_map(restored_large_d_map, apply_clahe=False)
 
     # Plot the restored image
-    plot_utils.plot_displacement_map(
-        restored_d_map,
-        title='Restored Displacement Map',
-        cmap='gray',  # Other cmaps: 'viridis', 'coolwarm',
-        save_plot=True
-    )
+    plot_utils.plot_displacement_map(restored_large_d_map, title='Restored Displacement Map', cmap='gray', save_plot=True)
 
     # Apply Sobel filter to the image
     # sobel_image = en.apply_sobel(d_map.copy())
@@ -256,10 +216,15 @@ if __name__ == "__main__":
     # )
 
     # Convert the restored displacement map to a Point Cloud
-    # point_cloud = convert_utils.displacement_map_to_point_cloud(d_map)
+    point_cloud_d_map = convert_utils.displacement_map_to_point_cloud(d_map)
+    plot_utils.plot_point_cloud(point_cloud_d_map, title='Displacement Map Point Cloud')
+    plot_utils.plotly_point_cloud(point_cloud_d_map, title='Restored Displacement Map Point Cloud')
 
-    # Plot the Point Cloud
-    # plot_utils.plot_point_cloud(point_cloud, title='Displacement Map Point Cloud')
+    point_cloud_restored_large = convert_utils.displacement_map_to_point_cloud(restored_large_d_map)
+    plot_utils.plotly_point_cloud(point_cloud_restored_large, title='Restored Displacement Map 3D Surface Plot')
 
-    # Plot the Point Cloud
-    # plot_utils.plotly_point_cloud(point_cloud, title='Restored Displacement Map Point Cloud')
+    point_cloud_restored_small = convert_utils.displacement_map_to_point_cloud(restore_small_d_map)
+    plot_utils.plotly_point_cloud(point_cloud_restored_small, title='Restored Displacement Map 3D Surface Plot')
+
+    point_cloud_enhanced = convert_utils.displacement_map_to_point_cloud(d_map_enhanced)
+    plot_utils.plotly_point_cloud(point_cloud_enhanced, title='Enhanced Displacement Map 3D Surface Plot')

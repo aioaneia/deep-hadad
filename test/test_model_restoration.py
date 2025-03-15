@@ -7,8 +7,8 @@ import torch
 from torchvision.transforms import ToPILImage, Compose, ToTensor
 
 import utils.cv_file_utils as file_utils
+from models.DHadadGenerator import DHadadGenerator
 
-from models.Spade2Generator import Spade2Generator
 
 
 # PyTorch version
@@ -16,18 +16,16 @@ print("PyTorch version: " + torch.__version__)
 
 # Constants
 PROJECT_PATH                       = '../'
-synthetic_damage_test_dataset_path = PROJECT_PATH + "data/test_dataset/Synthetic Damaged Glyphs"
-real_damage_test_dataset_path      = PROJECT_PATH + "data/test_dataset/Real Damaged Glyphs/"
+synthetic_damage_test_dataset_path = PROJECT_PATH + "data/test_dataset/synthetic damaged glyphs 1"
+real_damage_test_dataset_path      = PROJECT_PATH + "data/test_dataset/damage glyphs 1"
 
 IMAGE_EXTENSIONS = [".png", ".jpg", ".tif"]
 
 MODEL_PATH = PROJECT_PATH + 'trained_models/'
 
 MODEL_NAMES = [
-    'dh_model_ep_1_l100.00_s10.00_m5.00_g10.00_t0.10_f5.00_a0.40.pth',
-    'dh_model_ep_3_l100.00_s10.00_m5.00_g10.00_t0.10_f5.00_a0.40.pth',
-    'dh_model_ep_9_l100.00_s10.00_m5.00_g10.00_t0.10_f5.00_a0.40.pth',
-    "dh_model_ep_11_l100.00_s10.00_m5.00_g10.00_t0.10_f5.00_a0.40.pth"
+    'dh_model_ep_1_l1.00_s0.30_g2.00_a0.10.pth',
+    'dh_model_ep_2_l1.00_s0.30_g2.00_a0.10.pth',
 ]
 
 transform = Compose([
@@ -49,10 +47,9 @@ def load_model(model, model_path):
 
 def load_dh_generator():
     """ Loads the generator for the DHadad model """
-    return Spade2Generator(
+    return DHadadGenerator(
         input_nc=1,
         output_nc=1,
-        label_nc=1,
         ngf=64,
         n_downsampling=3,
         n_blocks=9
@@ -104,10 +101,9 @@ def generate_restored_image(generator, test_image_tensor, invert_pixel_values=Tr
     with torch.no_grad():
         # Add a batch dimension and move to the GPU if needed
         broken_image = test_image_tensor.unsqueeze(0).to(device)
-        segmap = torch.zeros_like(broken_image)
 
         # Generate the restored image and remove the batch dimension
-        restored_image = generator(broken_image, segmap).squeeze(0).cpu()
+        restored_image = generator(broken_image).squeeze(0).cpu()
 
         # Normalize the image to the range [0, 1]
         restored_image = (restored_image - restored_image.min()) / (restored_image.max() - restored_image.min())
