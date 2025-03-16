@@ -9,6 +9,7 @@
 /data/plots/*
 data/test_dataset/*
 /ui/*
+/trash/*
 /trained_models/*
 
 # OS generated files #
