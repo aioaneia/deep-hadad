@@ -4,10 +4,23 @@ from PIL.Image import Image
 from scipy.stats import ks_2samp
 
 
-####################################################################################################
-# Add blur
-# # Randomly choose between 3x3, 5x5, 7x7 kernel sizes
-####################################################################################################
+def extract_patches(d_map, patch_size=(256, 256), overlap=0.5):
+    """
+    Extract overlapping patches from larger displacement maps
+    """
+    patches = []
+    h, w = d_map.shape[:2]
+    stride_h = int(patch_size[0] * (1 - overlap))
+    stride_w = int(patch_size[1] * (1 - overlap))
+
+    for y in range(0, h - patch_size[0] + 1, stride_h):
+        for x in range(0, w - patch_size[1] + 1, stride_w):
+            patch = d_map[y:y+patch_size[0], x:x+patch_size[1]].copy()
+            patches.append(patch)
+
+    return patches
+
+
 def add_blur(image, kernel_size=3, sigma=0, preserve_edges=True):
     if preserve_edges:
         # Use bilateral filtering to preserve edges. 

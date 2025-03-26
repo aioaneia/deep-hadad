@@ -94,23 +94,11 @@ def get_norm_layer(norm_type='instance'):
 
 def instantiate_networks(ngf=64, n_down_sampling=3, n_blocks=6):
     """Instantiates the generator and discriminator"""
-    # grayscale images, 3 for RGB images
-    gen_in_channels  = 1
-    gen_out_channels = 1
+    # 1 for grayscale images, 3 for RGB images
+    generator = DHadadGenerator(input_nc = 1, output_nc = 1, ngf = ngf,
+                                n_downsampling = n_down_sampling, n_blocks = n_blocks).to(device)
 
-    generator = DHadadGenerator(
-        input_nc       = 1,
-        output_nc      = 1,
-        ngf            = ngf,               # Number of generator filters
-        n_downsampling = n_down_sampling,   # Number of down_sampling layers
-         n_blocks       = n_blocks          # Number of ResBlocks
-    ).to(device)
-
-    discriminator = DeepHadadDiscriminator(
-        input_nc=2,
-        ndf=ngf,
-        n_layers=n_down_sampling + 1
-    ).to(device)
+    discriminator = DeepHadadDiscriminator(input_nc=2, ndf=ngf, n_layers=n_down_sampling + 1).to(device)
 
     return generator, discriminator
 
@@ -473,30 +461,40 @@ def network_training(generator, discriminator, gen_optim, dis_optim,
     val_dataset_size   = val_dataset_size
 
     # Load the dataset
-    train_dataloader, val_dataloader = load_dataset(
-        DISPLACEMENT_MAPS_PATH,
-        train_size=train_dataset_size,
-        val_size=val_dataset_size,
-        save_images=False,
-        image_sizes=image_sizes
-    )
+    # train_dataloader, val_dataloader = load_dataset(
+    #     DISPLACEMENT_MAPS_PATH,
+    #     train_size=train_dataset_size,
+    #     val_size=val_dataset_size,
+    #     save_images=True,
+    #     image_sizes=image_sizes
+    # )
 
-    large_train_dataloader, large_val_dataloader = load_dataset(
-        DISPLACEMENT_MAPS_PATH_LARGE,
-        train_size=train_dataset_size,
-        val_size=val_dataset_size,
-        save_images=False,
-        image_sizes=[(512, 512)]
-    )
+    # large_train_dataloader, large_val_dataloader = load_dataset(
+    #     DISPLACEMENT_MAPS_PATH_LARGE,
+    #     train_size=50,
+    #     val_size=3,
+    #     save_images=False,
+    #     image_sizes=[(512, 512)]
+    # )
 
     for epoch in range(current_epoch, num_epochs):
+
+        # Load the dataset
+        train_dataloader, val_dataloader = load_dataset(
+            DISPLACEMENT_MAPS_PATH,
+            train_size=train_dataset_size,
+            val_size=val_dataset_size,
+            save_images=False,
+            image_sizes=image_sizes
+        )
+
         start_time = time.time()
 
         gen_loss, loss_components, dis_loss = train_step(generator, gen_optim, discriminator,
                                                          dis_optim, train_dataloader)
 
-        gen_loss_2, loss_components_2, dis_loss_2 = train_step(generator, gen_optim, discriminator,
-                                                         dis_optim, large_train_dataloader)
+        # gen_loss_2, loss_components_2, dis_loss_2 = train_step(generator, gen_optim, discriminator,
+        #                                                  dis_optim, large_train_dataloader)
 
         validation_step(generator, discriminator, val_dataloader, psnrs, ssims, esis)
 

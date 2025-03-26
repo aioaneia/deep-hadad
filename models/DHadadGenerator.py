@@ -67,10 +67,6 @@ class ResBlock(nn.Module):
         self.conv_dil4 = spectral_norm(nn.Conv2d(fmiddle, fmiddle//2, 3, padding=4, dilation=4))
         self.conv_dil8 = spectral_norm(nn.Conv2d(fmiddle, fmiddle//2, 3, padding=8, dilation=8))
 
-        # Deformable convolution
-        # self.offset_conv = spectral_norm(nn.Conv2d(fmiddle, 2*3*3, 3, padding=1))
-        # self.conv_deform = DeformConv2d(fmiddle, fmiddle, 3, padding=1)
-
         # Final projection
         self.conv_out = spectral_norm(nn.Conv2d(fmiddle * 2, fout, 3, padding=1))
 
@@ -85,7 +81,6 @@ class ResBlock(nn.Module):
             self.norm_shortcut = SimplifiedSPADE(fin)
 
     def forward(self, x):
-        # Shortcut path
         x_short = self.shortcut(x)
 
         # Main path
@@ -99,10 +94,6 @@ class ResBlock(nn.Module):
 
         # Concatenate multi-scale features
         combined = torch.cat([x1, x2, x4, x8], dim=1)
-
-        # Deformable convolution
-        # offset = self.offset_conv(dx)
-        # dx = self.conv_deform(dx, offset)
 
         # Final projection
         out = self.conv_out(combined)
@@ -133,18 +124,6 @@ class ProgressiveUpSampling(nn.Module):
         return self.act(x)
 
 
-class HybridUpSampling(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.pixel_shuffle = ProgressiveUpSampling(in_channels, out_channels)
-        self.transposed_conv = spectral_norm(nn.ConvTranspose2d(in_channels, out_channels, 3, stride=2, padding=1))
-
-    def forward(self, x):
-        x1 = self.pixel_shuffle(x)
-        x2 = self.transposed_conv(x)
-        return (x1 + x2) / 2  # Average for stability
-
-
 class DownsampleBlock(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -166,7 +145,7 @@ class DHadadGenerator(nn.Module):
         self.initial = nn.Sequential(
             nn.ZeroPad2d(3),
             spectral_norm(nn.Conv2d(input_nc, ngf, kernel_size=7)),
-            nn.GroupNorm(8, ngf),
+            nn.GroupNorm(8, ngf, affine=True),
             nn.LeakyReLU(0.2, inplace=True),
         )
 
@@ -185,8 +164,9 @@ class DHadadGenerator(nn.Module):
             self.skip_connections.append(nn.Sequential(
                 nn.Conv2d(down_in_channels, down_in_channels, kernel_size=1),
                 nn.GroupNorm(8, down_in_channels),
+                nn.LeakyReLU(0.2),
             ))
-            self.skip_weights.append(nn.Parameter(torch.ones(1) * 0.5))
+            self.skip_weights.append(nn.Parameter(torch.ones(1) * 0.3))
 
         # Add Self-Attention layer after downsampling
         self.attention_after_down = SelfAttention(ngf * (2 ** n_downsampling))

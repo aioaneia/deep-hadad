@@ -13,9 +13,6 @@ def apply_elastic_transform_2d(image, alpha, sigma, random_state=None):
     alpha (float): Intensity of deformation. Larger values result in more distortion.
     sigma (float): Smoothing factor for Gaussian filter (standard deviation). Larger values result in smoother fields.
     random_state (numpy.random.RandomState, optional): Random state for reproducibility.
-
-    Returns:
-    numpy.ndarray: Distorted 2D image.
     """
     if random_state is None:
         random_state = np.random.RandomState(None)
