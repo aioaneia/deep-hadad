@@ -15,3 +15,8 @@ pandas~=2.2.3
 scikit-learn~=1.6.1
 
 seaborn~=0.13.2
+OpenEXR~=3.3.2
+imath~=0.0.2
+
+pyexr~=0.5.0
+imageio~=2.37.0
