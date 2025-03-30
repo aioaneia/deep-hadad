@@ -1,6 +1,7 @@
 # Image files
 ######################
 
+/data/*
 /data/Inscriptions/*
 /data/inscriptions_dataset/*
 /data/training_dataset/*
