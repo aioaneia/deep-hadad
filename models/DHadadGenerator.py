@@ -1,3 +1,4 @@
+"""This file contains the generator for the DHadad model."""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -5,6 +6,7 @@ from torch.nn.utils import spectral_norm
 
 
 class SelfAttention(nn.Module):
+    """Self-attention layer"""
     def __init__(self, in_dim):
         super().__init__()
         self.conv = nn.Sequential(
@@ -16,11 +18,13 @@ class SelfAttention(nn.Module):
         self.gamma = nn.Parameter(torch.zeros(1))
 
     def forward(self, x):
+        """Forward pass of the self-attention layer"""
         attention_map = self.conv(x)
         return x + self.gamma * (x * attention_map)
 
 
 class CBAM(nn.Module):
+    """CBAM layer"""
     def __init__(self, channels):
         super().__init__()
         self.channel_attention = nn.Sequential(
@@ -37,23 +41,31 @@ class CBAM(nn.Module):
         )
 
     def forward(self, x):
+        """Forward pass of the CBAM layer"""
         ca = self.channel_attention(x) * x
         sa = self.spatial_attention(ca)
         return ca * sa
 
 
 class SimplifiedSPADE(nn.Module):
+    """Simplified SPADE layer"""
     def __init__(self, norm_nc):
+        """Initialize the simplified SPADE layer"""
         super().__init__()
         self.norm = nn.GroupNorm(num_groups=8, num_channels=norm_nc, affine=False)
         self.attention = CBAM(norm_nc)
 
     def forward(self, x):
+        """Forward pass of the simplified SPADE layer"""
         return self.attention(self.norm(x))
 
 
 class ResBlock(nn.Module):
+    """
+    Residual block
+    """
     def __init__(self, fin, fout):
+        """Initialize the residual block"""
         super().__init__()
         self.learned_shortcut = (fin != fout)
         fmiddle = min(fin, fout)
@@ -61,14 +73,14 @@ class ResBlock(nn.Module):
         # Main path convolutions
         self.conv_0 = spectral_norm(nn.Conv2d(fin, fmiddle, 3, padding=1))
 
-        # Parallel dilated convolutions
-        self.conv_dil1 = spectral_norm(nn.Conv2d(fmiddle, fmiddle//2, 3, padding=1, dilation=1))
-        self.conv_dil2 = spectral_norm(nn.Conv2d(fmiddle, fmiddle//2, 3, padding=2, dilation=2))
-        self.conv_dil4 = spectral_norm(nn.Conv2d(fmiddle, fmiddle//2, 3, padding=4, dilation=4))
-        self.conv_dil8 = spectral_norm(nn.Conv2d(fmiddle, fmiddle//2, 3, padding=8, dilation=8))
+        # Sequential dilated convolutions (dilation rates 1→2→4→8)
+        self.dilated_convs = nn.ModuleList([
+            spectral_norm(nn.Conv2d(fmiddle, fmiddle//4, 3, padding=d, dilation=d))
+            for d in [1, 2, 4, 8]
+        ])
 
         # Final projection
-        self.conv_out = spectral_norm(nn.Conv2d(fmiddle * 2, fout, 3, padding=1))
+        self.conv_out = spectral_norm(nn.Conv2d(fmiddle, fout, 3, padding=1))
 
         # Shortcut
         if self.learned_shortcut:
@@ -81,19 +93,21 @@ class ResBlock(nn.Module):
             self.norm_shortcut = SimplifiedSPADE(fin)
 
     def forward(self, x):
+        """Forward pass of the residual block"""
         x_short = self.shortcut(x)
 
         # Main path
         dx = self.conv_0(self.actvn(self.norm_0(x)))
         dx = self.actvn(self.norm_1(dx))
 
-        x1 = self.conv_dil1(dx)
-        x2 = self.conv_dil2(dx)
-        x4 = self.conv_dil4(dx)
-        x8 = self.conv_dil8(dx)
+        # Process through sequential dilated layers
+        dilated_features = []
+        for conv in self.dilated_convs:
+            dx = F.leaky_relu(self.norm_1(dx), 0.2)
+            dilated_features.append(conv(dx))
 
         # Concatenate multi-scale features
-        combined = torch.cat([x1, x2, x4, x8], dim=1)
+        combined = torch.cat(dilated_features, dim=1)
 
         # Final projection
         out = self.conv_out(combined)
@@ -101,15 +115,18 @@ class ResBlock(nn.Module):
         return x_short + out
 
     def shortcut(self, x):
+        """Shortcut for the residual block"""
         if self.learned_shortcut:
             return self.conv_shortcut(self.norm_shortcut(x))
         return x
 
     def actvn(self, x):
+        """Leaky ReLU activation function"""
         return F.leaky_relu(x, 0.2)
 
 
 class ProgressiveUpSampling(nn.Module):
+    """Progressive upsampling layer"""
     def __init__(self, in_channels, out_channels, negative_slope=0.2):
         super().__init__()
         self.conv1 = spectral_norm(nn.Conv2d(in_channels, out_channels * 4, kernel_size=3, padding=1))
@@ -125,6 +142,7 @@ class ProgressiveUpSampling(nn.Module):
 
 
 class DownsampleBlock(nn.Module):
+    """Downsample block for the generator."""
     def __init__(self, in_ch, out_ch):
         super().__init__()
         self.conv = nn.Sequential(
@@ -135,10 +153,14 @@ class DownsampleBlock(nn.Module):
         self.res = nn.Conv2d(in_ch, out_ch, 1, stride=2) if in_ch != out_ch else None
 
     def forward(self, x):
+        """Forward pass of the downsample block"""
         return self.conv(x) + (self.res(x) if self.res else x)
 
 
 class DHadadGenerator(nn.Module):
+    """
+    Generator for the DHadad model.
+    """
     def __init__(self, input_nc, output_nc, ngf=64, n_downsampling=3, n_blocks=9):
         super().__init__()
         # Initial convolution layer
@@ -152,10 +174,8 @@ class DHadadGenerator(nn.Module):
         # --- Downsampling ---
         self.down_layers      = nn.ModuleList()
         self.skip_connections = nn.ModuleList()
-        self.skip_weights     = nn.ParameterList()
 
         for i in range(n_downsampling):
-            # Calculate input and output channels
             down_in_channels = ngf * (2 ** i)
             down_out_channels = ngf * (2 ** (i+1))
 
@@ -166,7 +186,6 @@ class DHadadGenerator(nn.Module):
                 nn.GroupNorm(8, down_in_channels),
                 nn.LeakyReLU(0.2),
             ))
-            self.skip_weights.append(nn.Parameter(torch.ones(1) * 0.3))
 
         # Add Self-Attention layer after downsampling
         self.attention_after_down = SelfAttention(ngf * (2 ** n_downsampling))
@@ -210,16 +229,20 @@ class DHadadGenerator(nn.Module):
         nn.init.constant_(self.attention_mid.gamma, 0.3)
 
         # Special initialization for the final convolutional layer
-        nn.init.xavier_normal_(self.final[1].weight, gain=0.01)
-        nn.init.constant_(self.final[1].bias, 0.0)
+        conv_layer = self.final[1]
+        if isinstance(conv_layer, nn.Conv2d):
+            nn.init.xavier_normal_(conv_layer.weight, gain=0.01)
+            if conv_layer.bias is not None:
+                nn.init.constant_(conv_layer.bias, 0.0)
 
     def forward(self, input):
+        """Forward pass of the generator"""
         x = self.initial(input)
 
         # Downsampling
         skips = []
-        for i, (down, skip_conv, skip_weight) in enumerate(zip(self.down_layers, self.skip_connections, self.skip_weights)):
-            skips.append(skip_weight * skip_conv(x))
+        for i, (down, skip_conv) in enumerate(zip(self.down_layers, self.skip_connections)):
+            skips.append(skip_conv(x))
             x = down(x)
 
         # Self-Attention layer
@@ -243,6 +266,7 @@ class DHadadGenerator(nn.Module):
 
 
 def initialize_weights(m):
+    """Initialize the weights of the generator"""
     if isinstance(m, nn.Conv2d):
         if 'final' in str(m):
             nn.init.xavier_normal_(m.weight, gain=0.02)
@@ -255,4 +279,3 @@ def initialize_weights(m):
 
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
-

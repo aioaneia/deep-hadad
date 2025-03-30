@@ -1,3 +1,4 @@
+"""This file contains the training loop for the DHadad model."""
 import functools
 import logging
 import os
@@ -40,16 +41,16 @@ else:
 # PyTorch version
 print("PyTorch version: " + torch.__version__)
 
-#### Set hyperparameter values for training ####
-generator_lr          = 0.0003
-discriminator_lr      = 0.00015
+# Set hyperparameter values for training
+generator_lr          = 2e-4
+discriminator_lr      = 1e-4
 batch_size            = 6
-num_epochs            = 150
+num_epochs            = 200
 checkpoint_interval   = 3
 max_grad_norm         = 1.0
 patience              = 100
-improvement_threshold = 0.004  # represents
-lambda_gp             = 10     # The gradient penalty coefficient
+improvement_threshold = 0.004
+lambda_gp             = 10
 
 # Set the project paths
 PROJECT_PATH            = './'
@@ -58,14 +59,13 @@ X_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/X'
 Y_TRAINING_DATASET_PATH = TRAINING_DATASET_PATH + '/Y'
 
 DISPLACEMENT_MAPS_PATH       = PROJECT_PATH + 'data/glyphs_dataset/preserved_glyphs/displacement_maps/'
-DISPLACEMENT_MAPS_PATH_LARGE = PROJECT_PATH + 'data/glyphs_dataset/preserved_glyphs/displacement_maps_large_size/'
 CRACKS_DATASET_PATH          = PROJECT_PATH + 'data/cracks_dataset/'
 MASKS_DATASET_PATH           = PROJECT_PATH + 'data/masks_dataset/'
 INPUT_TRAINING_DATASET_PATH  = PROJECT_PATH + 'data/training_dataset/X/'
 TARGET_TRAINING_DATASET_PATH = PROJECT_PATH + 'data/training_dataset/Y/'
 
 MODEL_PATH         = PROJECT_PATH + 'trained_models/'
-MODEL_WEIGHTS_PATH = MODEL_PATH + 'dh_model_ep_19_l8.00_s2.00_g3.00_f0.80_c1.00_a0.10.pth'
+MODEL_WEIGHTS_PATH = MODEL_PATH + 'dh_model_l_ep_19_l8.00_s2.00_g3.00_f0.80_c1.00_a0.10.pth'
 
 IMAGE_EXTENSIONS = [".png", ".jpg", ".tif"]
 
@@ -92,13 +92,13 @@ def get_norm_layer(norm_type='instance'):
     return norm_layer
 
 
-def instantiate_networks(ngf=64, n_down_sampling=3, n_blocks=6):
+def instantiate_networks(ngf=64, n_downsample=4, n_blocks=6):
     """Instantiates the generator and discriminator"""
     # 1 for grayscale images, 3 for RGB images
     generator = DHadadGenerator(input_nc = 1, output_nc = 1, ngf = ngf,
-                                n_downsampling = n_down_sampling, n_blocks = n_blocks).to(device)
+                                n_downsampling = n_downsample, n_blocks = n_blocks).to(device)
 
-    discriminator = DeepHadadDiscriminator(input_nc=2, ndf=ngf, n_layers=n_down_sampling + 1).to(device)
+    discriminator = DeepHadadDiscriminator(input_nc=2, ndf=ngf//2, n_downsample=n_downsample).to(device)
 
     return generator, discriminator
 
@@ -107,94 +107,58 @@ def load_model_weights(model, model_path):
     """
     Loads the model weights from the specified path
     """
-    # Check if the model weights exist
     if not os.path.exists(model_path):
         print(f"Model weights not found at {model_path}. Training from scratch.")
         return model
     else:
         print(f"Loading model weights from {model_path}")
-
-    # Load the model weights
     checkpoint = torch.load(model_path, map_location=device)
-
-    # Load the model state dictionary
     model.load_state_dict(checkpoint)
 
     return model
 
 
 def init_optimizer(generator, discriminator):
-    # Initialize optimizers
+    """Initialize the optimizers"""
     gen_optim = RAdam(generator.parameters(), lr=generator_lr, betas=(0.5, 0.999))
     dis_optim = RAdam(discriminator.parameters(), lr=discriminator_lr, betas=(0.5, 0.999))
-
     return gen_optim, dis_optim
 
 
-def init_schedulers(gen_optim, dis_optim, opt="plateau"):
-    if opt == 'linear':
-        def lambda_rule(epoch):
-            lr_l = 1.0 - max(0, epoch + opt.epoch_count - opt.n_epochs) / float(opt.n_epochs_decay + 1)
-            return lr_l
+def init_schedulers(gen_optim, dis_optim):
+    """Initialize the learning rate schedulers"""
+    gen_scheduler = lr_scheduler.CosineAnnealingLR(
+        gen_optim,
+        T_max=200,
+        eta_min=1e-6
+    )
 
-        gen_scheduler = lr_scheduler.LambdaLR(
-            gen_optim,
-            lr_lambda=lambda_rule
-        )
-    elif opt == 'step':
-        gen_scheduler = lr_scheduler.StepLR(
-            gen_optim,
-            step_size=opt.lr_decay_iters,
-            gamma=0.1
-        )
-    elif opt == 'plateau':
-        gen_scheduler = lr_scheduler.ReduceLROnPlateau(
-            gen_optim,
-            mode='min',
-            factor=0.5,
-            threshold=0.01,
-            patience=10
-        )
-        dis_scheduler = lr_scheduler.ReduceLROnPlateau(
-            dis_optim,
-            mode='min',
-            factor=0.5,
-            threshold=0.01,
-            patience=10
-        )
-    elif opt == 'cosine':
-        gen_scheduler = lr_scheduler.CosineAnnealingLR(
-            gen_optim,
-            T_max=150,
-            eta_min=1e-6
-        )
-
-        dis_scheduler = lr_scheduler.CosineAnnealingLR(
-            dis_optim,
-            T_max=150,
-            eta_min=1e-6
-        )
-    else:
-        return NotImplementedError('learning rate policy [%s] is not implemented', opt.lr_policy)
+    dis_scheduler = lr_scheduler.CosineAnnealingLR(
+        dis_optim,
+        T_max=200,
+        eta_min=1e-5
+    )
 
     return gen_scheduler, dis_scheduler
 
 
-def train_discriminator_step(discriminator, damaged_dm, preserved_dm, fake_dm):
+def train_discriminator_step(discriminator, damaged_dm, real_dm, fake_dm):
     """
     Training step for the discriminator
-    damage_mask = torch.abs(damaged_dm - preserved_dm) > threshold
     """
-    combined_real = torch.cat([damaged_dm, preserved_dm], dim=1)
-    combined_fake = torch.cat([damaged_dm, fake_dm.detach()], dim=1)
-
+    # Real samples
+    combined_real = torch.cat([damaged_dm, real_dm], dim=1)
     real_pred = discriminator(combined_real)
+
+    # Fake samples
+    combined_fake = torch.cat([damaged_dm, fake_dm.detach()], dim=1)
     fake_pred = discriminator(combined_fake)
 
-    adv_loss = torch.mean(fake_pred) - torch.mean(real_pred)
+    # Adversarial loss
+    _, adv_loss = loss_functions.adversarial_loss(real_pred, fake_pred)
 
     # Compute gradient penalty
-    gradient_penalty = loss_functions.compute_gradient_penalty(discriminator, damaged_dm, fake_dm, preserved_dm)
+    gradient_penalty = loss_functions.compute_gradient_penalty(discriminator, damaged_dm, fake_dm, real_dm)
 
     dis_loss = adv_loss + lambda_gp * gradient_penalty
 
@@ -214,28 +178,43 @@ def safe_item(tensor):
     return tensor
 
 
-def train_generator_step(fake_dm, preserved_dm, dis_pred_fake):
+def train_generator_step(generator, discriminator, damaged_dm, real_dm):
     """Training step for the generator"""
-    l1_loss   = loss_functions.l1_loss(fake_dm, preserved_dm)
-    ssim_loss = loss_functions.ssim_loss(fake_dm, preserved_dm)
-    gdl       = loss_functions.gradient_loss(fake_dm, preserved_dm)
-    adv_loss  = -torch.mean(dis_pred_fake)
+    # Generate prediction
+    fake_dm = generator(damaged_dm)
+
+    # Core losses
+    l1_loss   = loss_functions.l1_loss(fake_dm, real_dm)
+    ssim_loss = loss_functions.ssim_loss(fake_dm, real_dm)
+    edge_loss = loss_functions.edge_loss(fake_dm, real_dm)
+
+    # Structural preservation losses
+    continuity_loss = loss_functions.depth_continuity_loss(fake_dm, real_dm)
+    # curvature_loss = loss_functions.curvature_consistency_loss(fake_dm, real_dm)
+
+    # Adversarial component
+    fake_input = torch.cat([damaged_dm, fake_dm], dim=1)
+    adv_loss  = -torch.mean(discriminator(fake_input))
 
     gen_loss = (
             loss_weights.current_weights['l1']   * l1_loss +
             loss_weights.current_weights['ssim'] * ssim_loss +
-            loss_weights.current_weights['gdl']  * gdl +
+            loss_weights.current_weights['edge'] * edge_loss +
+            loss_weights.current_weights['cont'] * continuity_loss +  # New key in weights
+            # loss_weights.current_weights['curv'] * curvature_loss +   # New key in weights
             loss_weights.current_weights['adv']  * adv_loss
     )
 
     loss_dict = {
         'L1':          safe_item(l1_loss),
         'SSIM':        safe_item(ssim_loss),
-        'GDL':         safe_item(gdl),
+        'Edge':        safe_item(edge_loss),
+        'Continuity':  safe_item(continuity_loss),
+        # 'Curvature':   safe_item(curvature_loss),
         'Adversarial': safe_item(adv_loss),
     }
 
-    return gen_loss, loss_dict
+    return gen_loss, loss_dict, fake_dm
 
 
 def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader, accumulation_steps=2):
@@ -299,18 +278,11 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader,
         # ----- Generator Training (less frequent) -----
         gen_optim.zero_grad()
 
-        # Generate new fake samples for generator training
-        fake_dm = generator(damaged_dm)
-
         # Freeze discriminator for generator training
         for param in discriminator.parameters():
             param.requires_grad = False
 
-        # Get discriminator predictions for generator training
-        dis_pred_fake = discriminator(torch.cat([damaged_dm, fake_dm], dim=1))
-
-        # Train generator
-        gen_loss, loss_components = train_generator_step(fake_dm, preserved_dm, dis_pred_fake)
+        gen_loss, loss_components, _ = train_generator_step(generator, discriminator, damaged_dm, preserved_dm)
 
         # Scale loss if accumulating gradients
         gen_loss = gen_loss / accumulation_steps
@@ -348,7 +320,7 @@ def train_step(generator, gen_optim, discriminator, dis_optim, train_dataloader,
     # Calculate average losses
     avg_gen_loss = total_gen_loss / batch_count
     avg_dis_loss = total_dis_loss / batch_count
-    avg_loss_components = {k: v / batch_count for k, v in accumulated_loss_components.items()}
+    avg_loss_components = {k: v / batch_count for k, v in accumulated_loss_components.items()} if accumulated_loss_components is not None else {}
 
     return avg_gen_loss, avg_loss_components, avg_dis_loss
 
@@ -443,7 +415,7 @@ def network_training(generator, discriminator, gen_optim, dis_optim,
                      num_epochs, current_epoch=0, train_dataset_size=30, val_dataset_size=6,
                      image_sizes=None):
     # Learning Rate Scheduling
-    gen_scheduler, dis_scheduler = init_schedulers(gen_optim, dis_optim, opt="cosine")
+    gen_scheduler, dis_scheduler = init_schedulers(gen_optim, dis_optim)
 
     # Initialize some variables for averaging
     best_psnr = -float('inf')
@@ -540,9 +512,8 @@ def network_training(generator, discriminator, gen_optim, dis_optim,
             print(f"Early stopping at epoch {epoch} due to no improvement.")
             break
 
-        # Step the learning rate scheduler based on the average combined score
-        gen_scheduler.step(gen_loss)
-        dis_scheduler.step(dis_loss)
+        gen_scheduler.step(epoch)
+        dis_scheduler.step(epoch)
 
         psnrs.clear()
         ssims.clear()
@@ -619,8 +590,8 @@ if __name__ == "__main__":
     # Instantiate the generator and discriminator
     generator, discriminator = instantiate_networks(
         ngf=64,
-        n_down_sampling=3,
-        n_blocks=9
+        n_downsample=4,
+        n_blocks=6
     )
 
     # Load the model weights if available
@@ -635,8 +606,8 @@ if __name__ == "__main__":
         gen_optim, dis_optim,
         num_epochs,
         current_epoch      = 0,
-        train_dataset_size = 5,
-        val_dataset_size   = 3,
+        train_dataset_size = 15,
+        val_dataset_size   = 5,
         image_sizes         = [(256, 256)]
     )
 
